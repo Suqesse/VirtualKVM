@@ -11,6 +11,7 @@ from pathlib import Path
 import queue
 import re
 import secrets
+import select
 import socket
 import ssl
 import struct
@@ -224,7 +225,7 @@ class HostServer:
         self._stopping.set()
         listener, self._listener = self._listener, None
         if listener:
-            listener.close()
+            _shutdown(listener)
         with self._lock:
             connections = list(self._connections)
         for connection in connections:
@@ -256,6 +257,37 @@ class HostServer:
                 self._threads.add(thread)
                 thread.start()
 
+    def _handshake(self, connection: ssl.SSLSocket) -> bool:
+        # Closing a socket from another thread does not reliably wake macOS's
+        # SSL readiness wait. Poll a nonblocking handshake so shutdown has its
+        # own bound instead of waiting for each peer's five-second timeout.
+        connection.setblocking(False)
+        deadline = time.monotonic() + 5
+        while not self._stopping.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TLS handshake exceeded its deadline")
+            try:
+                connection.do_handshake()
+                connection.settimeout(5)
+                return True
+            except ssl.SSLWantReadError:
+                readable, writable = [connection], []
+            except ssl.SSLWantWriteError:
+                readable, writable = [], [connection]
+            except AttributeError:
+                # SSLSocket.shutdown clears _sslobj while stop closes peers.
+                if self._stopping.is_set():
+                    return False
+                raise
+            try:
+                select.select(readable, writable, [], min(0.1, remaining))
+            except (OSError, ValueError):
+                if self._stopping.is_set():
+                    return False
+                raise OSError("TLS handshake socket became unavailable") from None
+        return False
+
     def _serve(self, raw: socket.socket, peer):
         connection = raw
         session = None
@@ -267,7 +299,8 @@ class HostServer:
                 self._connections.add(connection)
                 if self._stopping.is_set():
                     return
-            connection.do_handshake()
+            if not self._handshake(connection):
+                return
             session = _Session(connection, peer)
             now = time.monotonic()
             with self._lock:

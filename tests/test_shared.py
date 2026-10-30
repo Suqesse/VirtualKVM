@@ -182,39 +182,57 @@ class SharedTests(unittest.TestCase):
                     first = client._request("shared_read", offset=0, length=64 * 1024)
                     self.assertEqual(base64.b64decode(first["data"]), original[:64 * 1024])
                     source.write_bytes(replacement)
-                    from virtualkvm.shared import _native_source_version
                     active = self.host._session.transfer
-                    diagnostic = (f"native version before={active.native_status!r}; "
-                                  f"after={_native_source_version(active.stream.fileno())!r}")
+                    diagnostic = (f"initial metadata={active.status!r}; "
+                                  f"fresh metadata={active.directory.status(active.name)!r}; "
+                                  f"read handle retained={active.stream is not None}")
                     with self.assertRaisesRegex(ProtocolError, "changed", msg=diagnostic):
                         client._request("shared_read", offset=64 * 1024, length=64 * 1024)
         # Both failures must close their transfer and leave the session usable.
         client.shared_download("hello.txt", self.root / "after-mutation.txt")
         self.assertEqual((self.root / "after-mutation.txt").read_bytes(), (self.share / "hello.txt").read_bytes())
 
-    def test_native_change_time_detects_mutation_when_all_python_metadata_is_cached(self):
+    def test_windows_reader_releases_handles_that_keep_ntfs_metadata_stale(self):
         from unittest.mock import Mock, patch
-        source = self.share / "native-version"
+        source = self.share / "handle-version"
         original = b"a" * (128 * 1024)
         for replacement in (b"b" * len(original), b"b" * (64 * 1024) + original[64 * 1024:]):
             source.write_bytes(original)
             cached = source.stat()
             directory = Mock()
-            directory.status.return_value = cached
-            native = [100]
+            active_handles = set()
+            real_fdopen = os.fdopen
+            class TrackedReader:
+                def __init__(self, stream):
+                    self.stream = stream
+                    active_handles.add(self)
+                def __getattr__(self, name):
+                    return getattr(self.stream, name)
+                def close(self):
+                    try:
+                        self.stream.close()
+                    finally:
+                        active_handles.discard(self)
+            # Model the native failure: all metadata queries return the old
+            # version while our read handle is retained, including ChangeTime.
+            directory.status.side_effect = lambda _: cached if active_handles else source.stat()
+            directory.open_file.side_effect = lambda _: os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0))
             with patch("virtualkvm.shared.os.fstat", return_value=cached), \
-                    patch("virtualkvm.shared._native_source_version", side_effect=lambda _: tuple(native)):
+                    patch("virtualkvm.shared._reopen_between_shared_reads", return_value=True), \
+                    patch("virtualkvm.shared.os.fdopen", side_effect=lambda *args, **kwargs: TrackedReader(real_fdopen(*args, **kwargs))):
                 reader = SharedRead(os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0)),
-                                    "native-version", directory, source.name)
+                                    "handle-version", directory, source.name)
                 try:
+                    self.assertFalse(active_handles)
                     first, _ = reader.read(0, 64 * 1024)
                     self.assertEqual(first, original[:64 * 1024])
+                    self.assertFalse(active_handles)
                     source.write_bytes(replacement)
-                    native[0] += 1  # Native ChangeTime advances despite cached stat.
                     with self.assertRaisesRegex(SharedError, "changed"):
                         reader.read(64 * 1024, 64 * 1024)
                 finally:
                     reader.close()
+                self.assertFalse(active_handles)
             directory.close.assert_called_once()
 
     def test_directory_listing_is_bounded(self):

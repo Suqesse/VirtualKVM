@@ -1,5 +1,5 @@
 {
-  "created_utc": "2026-10-30T10:50:33.431545+00:00",
+  "created_utc": "2026-10-30T10:57:22.794739+00:00",
   "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
   "python": "3.12.14",
   "checks": [
@@ -13,7 +13,7 @@
     {
       "name": "tests",
       "exit_code": 0,
-      "seconds": 38.44,
+      "seconds": 32.35,
       "log": "build/validation/tests.log",
       "passed": true,
       "executed_tests": 134,
@@ -22,7 +22,7 @@
     {
       "name": "audio-video-smoke",
       "exit_code": 0,
-      "seconds": 4.67,
+      "seconds": 4.72,
       "log": "build/validation/audio-video-smoke.log",
       "passed": true
     }
@@ -32,12 +32,12 @@
     "virtualkvm/__init__.py": "ffcc0b1b290d901af48d4d2c9cfad10602b50705cab7d5480a9158bd63d089e8",
     "virtualkvm/__main__.py": "e3e415bd08f269a1277ebfb517d01058564b1972f1a0a2e3713c86a634b26ad3",
     "virtualkvm/app.py": "96c70fcd3c674bcae906f844dc2cbe32e6c100f5e22fb6f04c5ccd467f6e5cf8",
-    "virtualkvm/control.py": "b6b580fda93d804797e064d34a5a81ecb6c80dce412b97ba78805f025870fe1f",
+    "virtualkvm/control.py": "d453a1f8c667396a02809498313cfd59504cbffedf4138778b1bf011d290e5d7",
     "virtualkvm/gui.py": "1653046d212bd42edfe19eade5d263aad25f46a8b16fa7ba5d35f467f37b4667",
     "virtualkvm/media.py": "a64d5cf6d8f63971d2d12b02ae7134822fdf2b6e1db047e049c43d673e0698bb",
     "virtualkvm/native.py": "69a7d95b879a8c1d5767883f12492e1f03bea844b77577ab3e769e3c9c6aa9ff",
     "virtualkvm/security.py": "6ac3dd0a9253e6f47709ad5b1251f344bd3ec5f038be19e315992e5962048efc",
-    "virtualkvm/shared.py": "758e6b9126a11df0687be68d58ef804702e475983de087def1ffa31f923b152d",
+    "virtualkvm/shared.py": "647689f0320622d903c966bbc87b429620dcd5c06c8bdfb967423cdac466d245",
     "virtualkvm/shared_gui.py": "f9bc4abfa1241096c1dc456e02503a362ad6be7232d999e86fa1b46711d7825c"
   },
   "passed": true
