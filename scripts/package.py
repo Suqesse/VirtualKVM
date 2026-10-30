@@ -1,4 +1,4 @@
-"""Build VirtualKVM locally with PyInstaller; FFmpeg remains external."""
+"""Build VirtualKVM with PyInstaller, optionally including native media tools."""
 
 from __future__ import annotations
 

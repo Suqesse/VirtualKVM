@@ -29,7 +29,7 @@ def main(argv=None):
             tail.append(line)
         status = process.wait()
     if status:
-        message = "".join(tail)[-50000:]
+        message = "".join(tail)[-3500:]
         message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         print(f"::error title=Native build check failed::{message}", flush=True)
     return status if status >= 0 else 1

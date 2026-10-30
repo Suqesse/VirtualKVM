@@ -22,6 +22,6 @@ Qt libraries are loaded dynamically in the directory/bundle distribution. Do not
 
 ## External media and audio components
 
-FFmpeg and ffprobe are **not bundled automatically**. FFmpeg is licensed under LGPL or GPL depending on its build configuration; builds with libx264/libx265 commonly enable GPL components. Codecs, SRT, AAC implementations, hardware drivers, and other enabled libraries have their own notices. Review the exact FFmpeg build and its distribution terms if you distribute it separately.
+Native installers bundle FFmpeg and ffprobe; source/development and plain PyInstaller builds use external tools unless `--bundle-ffmpeg` is specified. FFmpeg is licensed under LGPL or GPL depending on its build configuration; builds with libx264/libx265 commonly enable GPL components. Codecs, SRT, AAC implementations, hardware drivers, and other enabled libraries have their own notices. Review the exact FFmpeg build and its distribution terms if you distribute it separately.
 
 Windows audio loopback/virtual audio drivers and macOS loopback devices such as BlackHole are external user-installed prerequisites when required for system-audio capture. They are not installed, bundled, or licensed by VirtualKVM.
