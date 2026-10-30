@@ -41,16 +41,7 @@ jobs:
       - name: Install Windows build tools
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          choco install ffmpeg-full innosetup -y --no-progress
-          if ($LASTEXITCODE -ne 0) { throw "Chocolatey installation failed" }
-          $media = Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg-full" -Filter ffmpeg.exe -Recurse | Select-Object -First 1
-          if (!$media) { throw "Real FFmpeg executable missing; launcher shims cannot be bundled" }
-          $probe = Join-Path $media.DirectoryName 'ffprobe.exe'
-          if (!(Test-Path $probe)) { throw "ffprobe missing" }
-          "VIRTUALKVM_FFMPEG=$($media.FullName)" >> $env:GITHUB_ENV
-          "VIRTUALKVM_FFPROBE=$probe" >> $env:GITHUB_ENV
-          $media.DirectoryName >> $env:GITHUB_PATH
+        run: python scripts/ci_run.py --log build/native-windows-tools.log -- pwsh -NoProfile -File scripts/install_build_tools_windows.ps1
       - name: Restore verified macOS media build
         if: runner.os == 'macOS'
         uses: actions/cache/restore@v4

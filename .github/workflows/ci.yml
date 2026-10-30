@@ -43,7 +43,7 @@ jobs:
           echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
-        run: choco install ffmpeg-full -y --no-progress
+        run: python scripts/ci_run.py --log build/native-windows-tools.log -- pwsh -NoProfile -File scripts/install_build_tools_windows.ps1 -MediaOnly
       - name: Install application
         run: |
           python -m pip install --only-binary=cryptography -r requirements.lock
