@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from functools import lru_cache
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,52 @@ class SharedError(ValueError):
 
 def _linked(status) -> bool:
     return stat.S_ISLNK(status.st_mode) or bool(getattr(status, "st_file_attributes", 0) & 0x400)
+
+
+@lru_cache(maxsize=1)
+def _windows_version_api():
+    """Initialize the ABI once instead of loading kernel32 for every chunk."""
+    import ctypes
+    import msvcrt
+
+    class FileBasicInfo(ctypes.Structure):
+        _fields_ = [("CreationTime", ctypes.c_int64), ("LastAccessTime", ctypes.c_int64),
+                    ("LastWriteTime", ctypes.c_int64), ("ChangeTime", ctypes.c_int64),
+                    ("FileAttributes", ctypes.c_uint32)]
+
+    class FileStandardInfo(ctypes.Structure):
+        _fields_ = [("AllocationSize", ctypes.c_int64), ("EndOfFile", ctypes.c_int64),
+                    ("NumberOfLinks", ctypes.c_uint32), ("DeletePending", ctypes.c_ubyte),
+                    ("Directory", ctypes.c_ubyte)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    query = kernel.GetFileInformationByHandleEx
+    query.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    query.restype = ctypes.c_int
+    return query, FileBasicInfo, FileStandardInfo, msvcrt.get_osfhandle
+
+
+def _native_source_version(descriptor: int):
+    """Use NTFS ChangeTime, which Python's stat timestamps do not expose.
+
+    LastWriteTime can remain cached until the final file handle closes. Native
+    FileBasicInfo additionally exposes ChangeTime, the file's metadata/data
+    change timestamp, and FileStandardInfo exposes current size/deletion state.
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    query, FileBasicInfo, FileStandardInfo, os_handle = _windows_version_api()
+    handle = os_handle(descriptor)
+    basic, standard = FileBasicInfo(), FileStandardInfo()
+    for kind, information in ((0, basic), (1, standard)):
+        if not query(handle, kind, ctypes.byref(information), ctypes.sizeof(information)):
+            raise SharedError("Cannot verify the Windows shared-file version") from ctypes.WinError(ctypes.get_last_error())
+    if standard.DeletePending or standard.Directory or standard.NumberOfLinks > 1 or basic.FileAttributes & 0x400:
+        raise SharedError("Shared file changed during download")
+    # LastAccessTime is intentionally excluded: our reads can change it.
+    return (basic.CreationTime, basic.LastWriteTime, basic.ChangeTime,
+            basic.FileAttributes, standard.EndOfFile, standard.NumberOfLinks)
 
 
 def _parts(value: str, *, root_allowed: bool = True) -> tuple[str, ...]:
@@ -194,6 +241,7 @@ class SharedRead:
             # trusting CRT/NTFS metadata cached on an already-open file handle.
             self.status = directory.status(name)
             self.size = self.status.st_size
+            self.native_status = _native_source_version(descriptor)
             handle = os.fstat(descriptor)
             if (handle.st_dev, handle.st_ino) != (self.status.st_dev, self.status.st_ino):
                 raise SharedError("Shared file changed during download")
@@ -214,6 +262,8 @@ class SharedRead:
                     status.st_ino, status.st_dev)
         if (_linked(current) or not stat.S_ISREG(current.st_mode) or current.st_nlink > 1
                 or version(current) != version(self.status)):
+            raise SharedError("Shared file changed during download")
+        if _native_source_version(self.stream.fileno()) != self.native_status:
             raise SharedError("Shared file changed during download")
 
     def read(self, offset, length):

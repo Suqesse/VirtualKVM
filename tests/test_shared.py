@@ -8,7 +8,7 @@ import time
 import unittest
 
 from virtualkvm.control import HostServer, ViewerClient, ProtocolError
-from virtualkvm.shared import SharedDirectory, SharedError
+from virtualkvm.shared import SharedDirectory, SharedError, SharedRead
 
 
 class SharedTests(unittest.TestCase):
@@ -182,11 +182,40 @@ class SharedTests(unittest.TestCase):
                     first = client._request("shared_read", offset=0, length=64 * 1024)
                     self.assertEqual(base64.b64decode(first["data"]), original[:64 * 1024])
                     source.write_bytes(replacement)
-                    with self.assertRaisesRegex(ProtocolError, "changed"):
+                    from virtualkvm.shared import _native_source_version
+                    active = self.host._session.transfer
+                    diagnostic = (f"native version before={active.native_status!r}; "
+                                  f"after={_native_source_version(active.stream.fileno())!r}")
+                    with self.assertRaisesRegex(ProtocolError, "changed", msg=diagnostic):
                         client._request("shared_read", offset=64 * 1024, length=64 * 1024)
         # Both failures must close their transfer and leave the session usable.
         client.shared_download("hello.txt", self.root / "after-mutation.txt")
         self.assertEqual((self.root / "after-mutation.txt").read_bytes(), (self.share / "hello.txt").read_bytes())
+
+    def test_native_change_time_detects_mutation_when_all_python_metadata_is_cached(self):
+        from unittest.mock import Mock, patch
+        source = self.share / "native-version"
+        original = b"a" * (128 * 1024)
+        for replacement in (b"b" * len(original), b"b" * (64 * 1024) + original[64 * 1024:]):
+            source.write_bytes(original)
+            cached = source.stat()
+            directory = Mock()
+            directory.status.return_value = cached
+            native = [100]
+            with patch("virtualkvm.shared.os.fstat", return_value=cached), \
+                    patch("virtualkvm.shared._native_source_version", side_effect=lambda _: tuple(native)):
+                reader = SharedRead(os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0)),
+                                    "native-version", directory, source.name)
+                try:
+                    first, _ = reader.read(0, 64 * 1024)
+                    self.assertEqual(first, original[:64 * 1024])
+                    source.write_bytes(replacement)
+                    native[0] += 1  # Native ChangeTime advances despite cached stat.
+                    with self.assertRaisesRegex(SharedError, "changed"):
+                        reader.read(64 * 1024, 64 * 1024)
+                finally:
+                    reader.close()
+            directory.close.assert_called_once()
 
     def test_directory_listing_is_bounded(self):
         from unittest.mock import patch

@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import socket
 import sys
 import tempfile
 import threading
@@ -26,6 +25,7 @@ if sys.platform.startswith("linux") and os.environ.get("QT_QPA_PLATFORM") in ("o
 
 from PySide6.QtCore import QCoreApplication, QObject, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeyEvent, QKeySequence, QPainter
+from PySide6.QtNetwork import QAbstractSocket, QNetworkInterface
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit, QPushButton,
@@ -622,12 +622,12 @@ class MainWindow(QMainWindow):
         self.host_fingerprint.setPlaceholderText("Появится после запуска хоста")
         self.synthetic = QCheckBox("Тестовый экран вместо захвата")
         self.synthetic.setChecked(sys.platform not in ("win32", "darwin"))
-        addresses = set()
-        try:
-            addresses = {item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
-                         if not item[4][0].startswith("127.")}
-        except OSError:
-            pass
+        # Enumerate local interfaces directly. Resolving gethostname() through
+        # DNS can block for minutes on unregistered native CI / LAN hostnames.
+        addresses = {address.toString() for address in QNetworkInterface.allAddresses()
+                     if address.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol
+                     and not address.isLoopback() and not address.isNull()
+                     and address.toString() != "0.0.0.0"}
         lan = QLabel("Адрес в локальной сети: " + (", ".join(sorted(addresses)) or "посмотрите в настройках сети"))
         lan.setWordWrap(True)
         lan.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)

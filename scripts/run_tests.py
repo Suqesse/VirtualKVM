@@ -2,9 +2,26 @@
 from __future__ import annotations
 
 import faulthandler
+import os
 from pathlib import Path
 import sys
 import unittest
+
+
+class NativeResult(unittest.TextTestResult):
+    def _annotate(self, test, error):
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            message = (str(test) + "\n" + self._exc_info_to_string(error, test))[-3500:]
+            message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Native test failure::{message}", flush=True)
+
+    def addFailure(self, test, error):
+        super().addFailure(test, error)
+        self._annotate(test, error)
+
+    def addError(self, test, error):
+        super().addError(test, error)
+        self._annotate(test, error)
 
 
 def main():
@@ -17,7 +34,7 @@ def main():
     try:
         sys.path.insert(0, str(root))
         suite = unittest.defaultTestLoader.discover(str(root / "tests"))
-        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        result = unittest.TextTestRunner(verbosity=2, resultclass=NativeResult).run(suite)
         return 0 if result.testsRun > 0 and result.wasSuccessful() else 1
     finally:
         faulthandler.cancel_dump_traceback_later()

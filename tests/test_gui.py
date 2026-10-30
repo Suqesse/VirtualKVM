@@ -148,6 +148,16 @@ class GuiControllerIntegration(unittest.TestCase):
             wait_ms(20)
         self.assertTrue(predicate(), self.window.log.toPlainText())
 
+    def test_gui_construction_never_resolves_machine_hostname(self):
+        with tempfile.TemporaryDirectory(prefix="virtualkvm-gui-no-dns-") as temporary:
+            with mock.patch("socket.gethostname", side_effect=AssertionError("GUI must enumerate interfaces without DNS")), \
+                    mock.patch("socket.getaddrinfo", side_effect=AssertionError("Synchronous DNS must not run on the GUI thread")):
+                self.window = MainWindow(Path(temporary))
+                self.window.show()
+            self.assertTrue(self.window.host_start.isEnabled())
+            self.window.close()
+            self.wait_for(lambda: self.window._shutdown_complete)
+
     def test_profiles_custom_native_preferences_and_secret_exclusion(self):
         import json
         with tempfile.TemporaryDirectory(prefix="virtualkvm-gui-settings-") as temporary:

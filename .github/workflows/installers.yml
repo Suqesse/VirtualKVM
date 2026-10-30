@@ -29,6 +29,8 @@ jobs:
     timeout-minutes: 90
     env:
       QT_QPA_PLATFORM: offscreen
+      # Hosted VMs do not provide reliable VideoToolbox/D3D decoder devices.
+      QT_FFMPEG_DECODING_HW_DEVICE_TYPES: ","
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
