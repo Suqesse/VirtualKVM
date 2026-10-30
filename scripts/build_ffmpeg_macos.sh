@@ -9,6 +9,15 @@ media_sha256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 mkdir -p "$media_root"
 brew install pkgconf nasm srt x264 x265
 export PKG_CONFIG_PATH="$(brew --prefix srt)/lib/pkgconfig:$(brew --prefix x264)/lib/pkgconfig:$(brew --prefix x265)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+runtime_ready=false
+if test -x "$media_root/runtime/bin/ffmpeg" && test -x "$media_root/runtime/bin/ffprobe"; then
+  if "$media_root/runtime/bin/ffmpeg" -hide_banner -version > /dev/null 2>&1 && \
+     "$media_root/runtime/bin/ffprobe" -hide_banner -version > /dev/null 2>&1 && \
+     "$media_root/runtime/bin/ffmpeg" -hide_banner -protocols 2>/dev/null | grep -q '^[[:space:]]*srt[[:space:]]*$'; then
+    runtime_ready=true
+  fi
+fi
+if test "$runtime_ready" = false; then
 archive="$media_root/ffmpeg-$media_version.tar.xz"
 curl --fail --location --retry 3 "https://ffmpeg.org/releases/ffmpeg-$media_version.tar.xz" --output "$archive"
 printf '%s  %s\n' "$media_sha256" "$archive" | shasum -a 256 --check
@@ -21,6 +30,9 @@ cd "$media_root/ffmpeg-$media_version"
   --enable-securetransport --enable-pthreads
 make -j 3
 make install
+else
+  printf 'Reusing the verified native FFmpeg cache.\n'
+fi
 "$media_root/runtime/bin/ffmpeg" -hide_banner -protocols
 if test -n "${GITHUB_ENV:-}"; then
   printf 'VIRTUALKVM_FFMPEG=%s\n' "$media_root/runtime/bin/ffmpeg" >> "$GITHUB_ENV"

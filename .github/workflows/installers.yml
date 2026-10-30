@@ -48,9 +48,22 @@ jobs:
           "VIRTUALKVM_FFMPEG=$($media.FullName)" >> $env:GITHUB_ENV
           "VIRTUALKVM_FFPROBE=$probe" >> $env:GITHUB_ENV
           $media.DirectoryName >> $env:GITHUB_PATH
+      - name: Restore verified macOS media build
+        if: runner.os == 'macOS'
+        uses: actions/cache/restore@v4
+        with:
+          path: build/ffmpeg-native/runtime
+          key: media-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build_ffmpeg_macos.sh') }}
       - name: Build verified macOS media runtime
+        id: media
         if: runner.os == 'macOS'
         run: python scripts/ci_run.py --log build/native-media.log -- bash scripts/build_ffmpeg_macos.sh
+      - name: Retain successful macOS media build
+        if: always() && runner.os == 'macOS' && steps.media.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/ffmpeg-native/runtime
+          key: media-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build_ffmpeg_macos.sh') }}
       - name: Install application build dependencies
         run: |
           python -m pip install -r requirements.lock

@@ -17,7 +17,7 @@ def main(argv=None):
     if not command:
         parser.error("A command is required after --")
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    tail = deque(maxlen=60)
+    tail = deque(maxlen=240)
     with args.log.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    text=True, errors="replace", bufsize=1)
@@ -29,7 +29,7 @@ def main(argv=None):
             tail.append(line)
         status = process.wait()
     if status:
-        message = "".join(tail)[-12000:]
+        message = "".join(tail)[-50000:]
         message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         print(f"::error title=Native build check failed::{message}", flush=True)
     return status if status >= 0 else 1

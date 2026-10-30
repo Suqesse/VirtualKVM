@@ -27,7 +27,7 @@ def main(argv=None):
         environment["QT_AUDIO_BACKEND"] = "pulseaudio"
     commands = [
         ("doctor", [sys.executable, "-m", "virtualkvm", "doctor"], 30),
-        ("tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], 180),
+        ("tests", [sys.executable, str(root / "scripts/run_tests.py")], 300),
         ("audio-video-smoke", [sys.executable, "-m", "virtualkvm", "smoke", "--fps", "240", "--audio"], 90),
     ]
     if args.packaged:
@@ -77,6 +77,7 @@ def main(argv=None):
         report["checks"].append(entry)
         print(f"{name}: {'PASS' if entry['passed'] else 'FAIL'} ({entry['seconds']}s)", flush=True)
         if not entry["passed"]:
+            print(log_path.read_text(encoding="utf-8", errors="replace")[-18000:], flush=True)
             break
     report["passed"] = len(report["checks"]) == len(commands) and all(c["passed"] for c in report["checks"])
     target = output / "report.json"
