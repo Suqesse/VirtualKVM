@@ -92,6 +92,34 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             client.send_clipboard("x" * (256 * 1024 + 1))
 
+    def test_simultaneous_clipboards_and_input_keep_tls_connected(self):
+        client = self.client()
+        failures = []
+        def broadcast():
+            try:
+                for index in range(500):
+                    self.host.broadcast_clipboard(f"host clipboard {index}")
+            except Exception as error:
+                failures.append(error)
+        worker = threading.Thread(target=broadcast)
+        worker.start()
+        try:
+            for index in range(500):
+                client.send_event({"type": "key", "key": "a", "down": bool(index % 2)})
+                client.send_clipboard(f"viewer clipboard {index}")
+            self.assertIn("time", client._request("ping", timeout=5))
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(failures, [])
+            wait_for(lambda: self.reverse_clipboard.qsize() == 500)
+            self.assertEqual(self.events.qsize(), 500)
+            self.assertEqual(self.clipboard.qsize(), 500)
+            self.assertEqual(self.reverse_clipboard.qsize(), 500)
+            self.assertTrue(client.connected)
+            self.assertTrue(self.host.sessions)
+        finally:
+            worker.join(timeout=2)
+
     def test_file_transfer_integrity_and_no_overwrite(self):
         client = self.client()
         source = self.root / "example.bin"

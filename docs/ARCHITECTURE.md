@@ -8,6 +8,7 @@ VirtualKVM 0.1.0 is a pilot application that separates the desktop control plane
 | --- | --- |
 | `app.py` | Host/viewer lifecycle, stream negotiation, receiver ports, native input, cleanup |
 | `control.py` | Framed TLS messages, authenticated sessions, events, clipboard, files, shared-folder browser, stream RPC |
+| `transport.py` | Serialized nonblocking TLS operations, independent caller deadlines and interruptible shutdown |
 | `security.py` | Persisted host certificate, SHA-256 certificate fingerprint, pairing proof |
 | `media.py` | FFmpeg discovery, audio/video capture, encrypted SRT sender, RGB receiver and timestamp-preserving A/V relay |
 | `native.py` | Display enumeration, Windows/macOS input injection, release of held input, platform permissions |
@@ -44,6 +45,8 @@ Only an authenticated controlling session may inject input or negotiate streams.
 ## Trust and framing
 
 The host generates a local certificate and persists its private key in its state directory. The viewer must obtain the certificate's SHA-256 fingerprint from the trusted host and verify it before sending pairing credentials. A self-signed certificate alone is not a reason to skip server identity verification. The PIN authorizes a controlling connection; its challenge proof is bound to a fresh challenge inside the encrypted channel.
+
+The TLS transport serializes individual OpenSSL calls across reader and writer threads. Socket readiness waits happen outside that lock, and logical timeouts belong to the calling thread; reading a partial frame cannot change a concurrent writer's socket mode or deadline. Shutdown interrupts readiness waits within a bounded interval.
 
 JSON control frames are length-limited. Input events, dimensions, display identifiers, and receiver ports are validated. Files use bounded chunks, declared sizes, and a final SHA-256 check. The receiver uses a safe basename, a temporary file, and completion before exposing the result; existing files must not be silently overwritten. Clipboard messages contain bounded text and require an explicit GUI opt-in before applying it locally.
 

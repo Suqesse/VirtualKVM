@@ -57,7 +57,7 @@ class MacInstallerTests(unittest.TestCase):
         output = ""
         if command[0] == "otool":
             minimum = "14.0" if "QtCore" in command[-1] else "12.0"
-            output = f"Load command 1\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos {minimum}\n      sdk 15.0\n"
+            output = f"Load command 1\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos {minimum}\n      sdk 15.0\n   ntools 1\n     tool 3\n  version 27106.1\n"
         elif command[:2] == ["lipo", "-archs"]:
             output = self.observations.get("architectures", "arm64")
         elif command[:2] == ["pkgbuild", "--analyze"]:
@@ -104,6 +104,25 @@ class MacInstallerTests(unittest.TestCase):
         elif command[:3] == ["xcrun", "notarytool", "submit"]:
             output = json.dumps({"status": self.notary_status, "id": "fixture-submission"})
         return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    def test_deployment_versions_exclude_other_platforms_sdk_and_build_tools(self):
+        output = """cmd LC_BUILD_VERSION
+ platform 2
+ minos 99.0
+ sdk 99.0
+ tool 3
+ version 27106.1
+cmd LC_BUILD_VERSION
+ platform macos
+ minos 13.3
+ sdk 26.0
+ tool 3
+ version 27106.1
+cmd LC_VERSION_MIN_MACOSX
+ version 14.2
+ sdk 26.0
+"""
+        self.assertEqual(list(macos._macho_minimum_versions(output)), ["13.3", "14.2"])
 
     def test_native_package_and_drag_drop_image_preserve_bundle(self):
         before = (self.bundle / "Contents/Info.plist").read_bytes()
@@ -189,11 +208,11 @@ class MacInstallerTests(unittest.TestCase):
     def test_dmg_icon_is_applied_to_staging_only(self):
         icon = self.directory / "VirtualKVM.icns"
         icon.write_bytes(b"icns fixture")
-        with mock.patch.object(macos.os, "setxattr", create=True) as attribute:
-            artifacts = macos.build_installers(self.bundle, "0.1.0", self.output, icon=icon)
+        artifacts = macos.build_installers(self.bundle, "0.1.0", self.output, icon=icon)
         self.assertEqual(len(artifacts), 2)
-        self.assertEqual(attribute.call_args.args[1], "com.apple.FinderInfo")
-        self.assertEqual(attribute.call_args.args[2][8:10], b"\x04\x00")
+        attribute = next(command for command in self.commands if command[0] == "/usr/bin/xattr")
+        self.assertEqual(attribute[1:3], ["-wx", "com.apple.FinderInfo"])
+        self.assertEqual(bytes.fromhex(attribute[3])[8:10], b"\x04\x00")
         self.assertFalse((self.bundle / ".VolumeIcon.icns").exists())
 
 

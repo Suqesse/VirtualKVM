@@ -47,6 +47,11 @@ def prepare_notices(root: Path, packaging_dir: Path) -> Path:
             # as destinations, even if an unusual filename contains 'license'.
             if entry.is_absolute() or ".." in entry.parts:
                 continue
+            # PyObjC test/debug binaries named copying*.so are not licenses.
+            if any(part.lower().endswith(".dsym") for part in entry.parts) or entry.suffix.lower() in {
+                ".so", ".dylib", ".pyd", ".dll", ".a", ".o", ".py", ".pyc", ".c", ".h"
+            }:
+                continue
             source = Path(distribution.locate_file(entry))
             if not source.is_file():
                 continue

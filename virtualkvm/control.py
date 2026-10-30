@@ -22,6 +22,7 @@ from typing import Callable
 
 from .security import SecurityError, connect_pinned, pairing_proof, server_identity
 from .shared import SharedDirectory, SharedRead, SharedUpload
+from .transport import TLSConnection
 
 MAX_MESSAGE = 1024 * 1024
 MAX_FILE_SIZE = 1024 * 1024 * 1024
@@ -188,7 +189,7 @@ class HostServer:
         self._listener: socket.socket | None = None
         self._accept_thread: threading.Thread | None = None
         self._threads: set[threading.Thread] = set()
-        self._connections: set[socket.socket] = set()
+        self._connections: set[socket.socket | TLSConnection] = set()
         self._session: _Session | None = None
         self._lock = threading.RLock()
         self._stopping = threading.Event()
@@ -301,6 +302,14 @@ class HostServer:
                     return
             if not self._handshake(connection):
                 return
+            secured = connection
+            connection = TLSConnection(secured)
+            with self._lock:
+                self._connections.discard(secured)
+                self._connections.add(connection)
+                if self._stopping.is_set():
+                    return
+            connection.settimeout(5)
             session = _Session(connection, peer)
             now = time.monotonic()
             with self._lock:
@@ -517,7 +526,8 @@ class ViewerClient:
     def connect(self, host, port=24800, pin=None, fingerprint=None):
         if self._connection:
             raise RuntimeError("Viewer is already connected")
-        connection = connect_pinned(host, port, fingerprint)
+        connection = TLSConnection(connect_pinned(host, port, fingerprint))
+        connection.settimeout(5)
         try:
             challenge = _receive_message(connection)
             if challenge.get("type") != "challenge" or challenge.get("version") != 1:

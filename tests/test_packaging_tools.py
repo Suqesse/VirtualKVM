@@ -5,11 +5,12 @@ import struct
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 from scripts.icons import generate_icons
-from scripts.package import configure_macos_privacy
+from scripts.package import configure_macos_privacy, prepare_notices
 from virtualkvm.media import FFmpegLocator, _popen_options
 
 
@@ -25,6 +26,21 @@ class PackagingToolsTests(unittest.TestCase):
                 image=data[offset:offset+length]
                 self.assertTrue(image.startswith(b'\x89PNG\r\n\x1a\n'))
                 self.assertEqual(struct.unpack('>II',image[16:24]),(width or 256,height or 256))
+
+    def test_notice_collection_excludes_executable_debug_test_fixtures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            files = [Path("licenses/LICENSE.txt"), Path("PyObjCTest/copying.cpython-312-darwin.so"),
+                     Path("PyObjCTest/copying.so.dSYM/Contents/Resources/DWARF/copying")]
+            for entry in files:
+                target = directory / "distribution" / entry
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"license text" if entry.suffix == ".txt" else b"binary fixture")
+            distribution = SimpleNamespace(files=files, locate_file=lambda entry: directory / "distribution" / entry)
+            with mock.patch("scripts.package.metadata.distribution", return_value=distribution):
+                notices = prepare_notices(Path(__file__).resolve().parents[1], directory / "packaging")
+            self.assertTrue((notices / "PySide6-Essentials/licenses/LICENSE.txt").is_file())
+            self.assertFalse(any("PyObjCTest" in path.parts for path in notices.rglob("*")))
 
     def test_macos_metadata_is_written_before_bundle_creation(self):
         with tempfile.TemporaryDirectory() as temporary:

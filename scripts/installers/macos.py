@@ -62,6 +62,25 @@ def _validate_bundle(bundle: Path, version: str | None = None) -> dict:
     return info
 
 
+def _macho_minimum_versions(output: str):
+    """Read deployment versions, excluding SDK and linker-tool versions."""
+    command, target_platform, minimum = None, None, None
+    for line in [*output.splitlines(), "cmd END"]:
+        match = re.match(r"\s*cmd\s+(\S+)", line)
+        if match:
+            if command == "LC_BUILD_VERSION" and target_platform in {"1", "macos"} and minimum:
+                yield minimum
+            command, target_platform, minimum = match.group(1), None, None
+        elif command == "LC_BUILD_VERSION":
+            if match := re.match(r"\s*platform\s+(\S+)", line):
+                target_platform = match.group(1).lower()
+            elif match := re.match(r"\s*minos\s+([0-9]+(?:\.[0-9]+){1,2})\s*$", line):
+                minimum = match.group(1)
+        elif command == "LC_VERSION_MIN_MACOSX":
+            if match := re.match(r"\s*version\s+([0-9]+(?:\.[0-9]+){1,2})\s*$", line):
+                yield match.group(1)
+
+
 def _minimum_os(bundle: Path) -> str:
     """Use actual bundle/framework metadata and Mach-O deployment targets."""
     versions: list[str] = []
@@ -83,12 +102,7 @@ def _minimum_os(bundle: Path) -> str:
         if magic not in _MACHO_MAGICS:
             continue
         output = _run(["otool", "-l", str(binary)], capture=True).stdout
-        relevant_command = False
-        for line in output.splitlines():
-            if re.match(r"\s*cmd\s+", line):
-                relevant_command = bool(re.search(r"LC_(?:BUILD_VERSION|VERSION_MIN_MACOSX)\b", line))
-            if relevant_command and (match := re.match(r"\s*(?:minos|version)\s+([0-9]+(?:\.[0-9]+){1,2})\s*$", line)):
-                versions.append(match.group(1))
+        versions.extend(_macho_minimum_versions(output))
     if not versions:
         raise ValueError("No minimum macOS deployment target found in bundle metadata or Mach-O headers")
     return max(versions, key=lambda value: tuple(int(part) for part in value.split(".")) +
@@ -255,7 +269,7 @@ def build_installers(app_bundle: Path, version: str, output_dir: Path, *,
             shutil.copy2(icon, disk_root / ".VolumeIcon.icns")
             finder_info = bytearray(32)
             finder_info[8:10] = (0x0400).to_bytes(2, "big")  # kHasCustomIcon
-            os.setxattr(disk_root, "com.apple.FinderInfo", bytes(finder_info))
+            _run(["/usr/bin/xattr", "-wx", "com.apple.FinderInfo", bytes(finder_info).hex(), str(disk_root)])
         image = work / f"{stem}.dmg"
         _run(["hdiutil", "create", "-volname", "VirtualKVM", "-srcfolder", str(disk_root),
               "-format", "UDZO", str(image)])
