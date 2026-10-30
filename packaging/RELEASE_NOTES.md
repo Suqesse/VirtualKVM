@@ -3,8 +3,8 @@
 The pilot installers include Python, Qt, FFmpeg and ffprobe. No separate runtime installation or post-install download is required.
 
 - **Windows x64:** download and run `VirtualKVM-*-windows-x64-setup.exe`.
-- **Mac Apple Silicon:** download the `macos-arm64.pkg` wizard or the matching `.dmg`.
-- **Mac Intel:** download the `macos-x86_64.pkg` wizard or the matching `.dmg`.
+- **Mac Apple Silicon (macOS 15 or later):** download the `macos-arm64.pkg` wizard or the matching `.dmg`.
+- **Mac Intel (macOS 15 or later):** download the `macos-x86_64.pkg` wizard or the matching `.dmg`.
 
 Packages are published only after native install, offline media, upgrade, and platform-specific uninstall/disk-image checks pass for the exact tagged commit.
 

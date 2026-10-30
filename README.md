@@ -51,7 +51,7 @@
 
 ### Установить приложение
 
-Скачайте [установщик для Windows или Mac](https://github.com/Suqesse/VirtualKVM/releases): `.exe` для Windows, `.pkg` или `.dmg` для своей архитектуры Mac. Python и FFmpeg входят в установщик. [Пошаговая инструкция →](docs/INSTALLERS.md)
+Скачайте [установщик для Windows или Mac](https://github.com/Suqesse/VirtualKVM/releases): `.exe` для Windows x64, `.pkg` или `.dmg` для своей архитектуры Mac с macOS 15 или новее. Python и FFmpeg входят в установщик. [Пошаговая инструкция →](docs/INSTALLERS.md)
 
 Нативные пакеты проходят сборку и проверку установки в [Installers](https://github.com/Suqesse/VirtualKVM/actions/workflows/installers.yml). Пилотные пакеты выпускаются без доверенной подписи, пока владелец проекта не добавит сертификаты.
 
