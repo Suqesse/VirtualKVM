@@ -27,8 +27,19 @@ if test -x "$media_root/runtime/bin/ffmpeg" && test -x "$media_root/runtime/bin/
 fi
 if test "$runtime_ready" = false; then
 archive="$media_root/ffmpeg-$media_version.tar.xz"
-curl --fail --location --retry 3 "https://ffmpeg.org/releases/ffmpeg-$media_version.tar.xz" --output "$archive"
-printf '%s  %s\n' "$media_sha256" "$archive" | shasum -a 256 --check
+downloaded=false
+for origin in https://ffmpeg.org https://www.ffmpeg.org; do
+  if curl --ipv4 --fail --location --retry 4 --retry-all-errors --retry-delay 2 \
+      --retry-max-time 180 --connect-timeout 20 --max-time 120 \
+      --proto '=https' --proto-redir '=https' \
+      "$origin/releases/ffmpeg-$media_version.tar.xz" --output "$archive.download"; then
+    printf '%s  %s\n' "$media_sha256" "$archive.download" | shasum -a 256 --check
+    mv "$archive.download" "$archive"
+    downloaded=true
+    break
+  fi
+done
+test "$downloaded" = true
 tar -xJf "$archive" -C "$media_root"
 cd "$media_root/ffmpeg-$media_version"
 ./configure --prefix="$media_root/runtime" --disable-autodetect \

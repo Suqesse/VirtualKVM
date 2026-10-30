@@ -84,6 +84,7 @@ def _macho_minimum_versions(output: str):
 def _minimum_os(bundle: Path) -> str:
     """Use actual bundle/framework metadata and Mach-O deployment targets."""
     versions: list[str] = []
+    requirements: list[tuple[str, Path]] = []
     for plist in bundle.rglob("Info.plist"):
         if plist.is_symlink():
             continue
@@ -92,6 +93,7 @@ def _minimum_os(bundle: Path) -> str:
             if not isinstance(value, str) or not _OS_VERSION.fullmatch(value):
                 raise ValueError(f"Invalid LSMinimumSystemVersion in {plist}")
             versions.append(value)
+            requirements.append((value, plist))
     # Qt's deployment target can be newer than PyInstaller's top-level plist.
     # Inspect real binary headers rather than inventing a minimum OS version.
     for binary in bundle.rglob("*"):
@@ -102,11 +104,25 @@ def _minimum_os(bundle: Path) -> str:
         if magic not in _MACHO_MAGICS:
             continue
         output = _run(["otool", "-l", str(binary)], capture=True).stdout
-        versions.extend(_macho_minimum_versions(output))
+        targets = list(_macho_minimum_versions(output))
+        versions.extend(targets)
+        requirements.extend((value, binary) for value in targets)
     if not versions:
         raise ValueError("No minimum macOS deployment target found in bundle metadata or Mach-O headers")
-    return max(versions, key=lambda value: tuple(int(part) for part in value.split(".")) +
-               (0,) * (3 - len(value.split("."))))
+    def numeric(value):
+        return tuple(int(part) for part in value.split(".")) + (0,) * (3 - len(value.split(".")))
+    minimum = max(versions, key=numeric)
+    current = platform.mac_ver()[0]
+    if current and numeric(minimum) > numeric(current):
+        for value, origin in requirements:
+            if numeric(value) == numeric(minimum):
+                message = f"macOS {value} required by {origin.relative_to(bundle)}"
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                    print(f"::notice title=Minimum macOS dependency::{message}", flush=True)
+                else:
+                    print(message, flush=True)
+    return minimum
 
 
 def _architectures(bundle: Path, info: dict) -> tuple[str, str]:
