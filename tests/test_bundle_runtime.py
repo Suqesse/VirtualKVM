@@ -105,15 +105,18 @@ class MacRelocationTests(unittest.TestCase):
             original = source if source in self.graph else next(path for path in self.graph if path.read_bytes() == source.read_bytes())
             references = list(self.graph[original])
             for change in self.commands:
-                if change[:2] == ["install_name_tool", "-change"] and change[-1] == str(source):
-                    references = [change[3] if item == change[2] else item for item in references]
-                elif change[:2] == ["install_name_tool", "-id"] and change[-1] == str(source):
-                    references = [change[2] if item == str(original) else item for item in references]
+                if change[0] != "install_name_tool" or change[-1] != str(source):
+                    continue
+                for index, option in enumerate(change[:-1]):
+                    if option == "-change":
+                        references = [change[index + 2] if item == change[index + 1] else item for item in references]
+                    elif option == "-id":
+                        references = [change[index + 1] if item == str(original) else item for item in references]
             return str(source) + ":\n" + "\n".join(f"\t{item} (compatibility version 1.0.0, current version 1.0.0)" for item in references)
         if command[:2] == ["otool", "-l"]:
             source = Path(command[2])
             original = source if source in self.graph else next(path for path in self.graph if path.read_bytes() == source.read_bytes())
-            removed = [item[2] for item in self.commands if item[:2] == ["install_name_tool", "-delete_rpath"] and item[-1] == str(source)]
+            removed = [item[index + 1] for item in self.commands if item[0] == "install_name_tool" and item[-1] == str(source) for index, option in enumerate(item[:-1]) if option == "-delete_rpath"]
             return "\n".join(f"Load command 1\n cmd LC_RPATH\n cmdsize 48\n path {value} (offset 12)" for value in self.rpaths.get(original, []) if value not in removed)
         return ""
 
@@ -126,12 +129,13 @@ class MacRelocationTests(unittest.TestCase):
                 patch.dict(os.environ, {"MACOS_APP_SIGN_IDENTITY": ""}):
             mapping = _relocate_macos(self.runtime, self.executables)
         self.assertEqual(len(mapping), 4)
-        changes = [command for command in self.commands if command[:2] == ["install_name_tool", "-change"]]
+        changes = [(command[index + 1], command[index + 2]) for command in self.commands if command[0] == "install_name_tool" for index, option in enumerate(command[:-1]) if option == "-change"]
         self.assertEqual(len(changes), 4)
-        self.assertTrue(all(command[3].startswith("@loader_path/") for command in changes))
+        self.assertTrue(all(replacement.startswith("@loader_path/") for _, replacement in changes))
         self.assertFalse(any("/usr/lib/libSystem.B.dylib" in command for command in changes))
         self.assertEqual(len([command for command in self.commands if command[:3] == ["codesign", "--force", "--sign"]]), 4)
         self.assertTrue(all(path.is_file() for path in mapping.values()))
+        self.assertFalse(any("--remove-signature" in command for command in self.commands))
 
     def test_rpath_expansion_and_basename_collisions(self):
         first = self.file("brew/lib/libsame.dylib")
@@ -141,7 +145,7 @@ class MacRelocationTests(unittest.TestCase):
         with patch("scripts.bundle_runtime._run", side_effect=self.fake_run):
             mapping = _relocate_macos(self.runtime, self.executables)
         self.assertNotEqual(mapping[first].name, mapping[second].name)
-        self.assertTrue(any(command[:2] == ["install_name_tool", "-delete_rpath"] for command in self.commands))
+        self.assertTrue(any(command[0] == "install_name_tool" and "-delete_rpath" in command for command in self.commands))
 
     def test_missing_dependency_and_non_system_framework_fail(self):
         with self.assertRaisesRegex(BundleError, "Cannot resolve"):

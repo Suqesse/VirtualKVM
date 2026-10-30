@@ -22,7 +22,9 @@ jobs:
     timeout-minutes: 25
     env:
       QT_QPA_PLATFORM: offscreen
+      QT_FFMPEG_DECODING_HW_DEVICE_TYPES: ","
       PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

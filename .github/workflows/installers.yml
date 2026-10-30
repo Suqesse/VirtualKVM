@@ -60,6 +60,26 @@ jobs:
             build/ffmpeg-native/deps
             build/ffmpeg-native/sources
           key: media-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build_ffmpeg_macos.sh', 'scripts/build_media_deps_macos.sh') }}
+      - name: Restore Intel dependency build
+        if: matrix.target == 'macos-x86_64'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/ffmpeg-native/deps
+            build/ffmpeg-native/sources
+          key: media-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build_media_deps_macos.sh') }}
+      - name: Build and verify Intel media dependencies
+        id: intel-deps
+        if: matrix.target == 'macos-x86_64'
+        run: python scripts/ci_run.py --log build/native-media-deps.log -- bash scripts/build_media_deps_macos.sh "$GITHUB_WORKSPACE/build/ffmpeg-native/deps"
+      - name: Retain verified Intel dependencies
+        if: always() && matrix.target == 'macos-x86_64' && steps.intel-deps.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/ffmpeg-native/deps
+            build/ffmpeg-native/sources
+          key: media-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build_media_deps_macos.sh') }}
       - name: Build verified macOS media runtime
         id: media
         if: runner.os == 'macOS'

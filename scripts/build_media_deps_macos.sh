@@ -140,7 +140,7 @@ validate_prefix() {
   local library
   for library in libcrypto libssl libsrt libx264 libx265; do
     test -f "$prefix/lib/$library.dylib" || return 1
-    lipo -verify_arch x86_64 "$prefix/lib/$library.dylib" || return 1
+    lipo "$prefix/lib/$library.dylib" -verify_arch x86_64 || return 1
   done
   "$CC" -O2 -arch x86_64 -mmacosx-version-min="$MACOSX_DEPLOYMENT_TARGET" \
     "$sources/intel-dependencies-smoke.c" -I"$prefix/include" -L"$prefix/lib" \

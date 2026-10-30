@@ -21,10 +21,41 @@ def _linked(status) -> bool:
     return stat.S_ISLNK(status.st_mode) or bool(getattr(status, "st_file_attributes", 0) & 0x400)
 
 
-def _reopen_between_shared_reads() -> bool:
-    # NTFS can defer file-version updates while *any* of our read handles stay
-    # open. Release each Windows read handle before returning a protocol chunk.
-    return os.name == "nt"
+def _open_windows_shared_file(path: Path) -> int:
+    """Keep a Windows source stable by denying write/delete sharing.
+
+    The handle is transferred to a CRT descriptor and retained until the
+    download ends. This avoids relying on same-tick/cached NTFS timestamps.
+    """
+    import ctypes
+    import msvcrt
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32,
+                       ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    create.restype = ctypes.c_void_p
+    close = kernel.CloseHandle
+    close.argtypes, close.restype = [ctypes.c_void_p], ctypes.c_int
+    query = kernel.GetFileInformationByHandleEx
+    query.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    query.restype = ctypes.c_int
+    # GENERIC_READ; FILE_SHARE_READ (no WRITE or DELETE); OPEN_EXISTING;
+    # FILE_FLAG_OPEN_REPARSE_POINT prevents following a replaced final link.
+    handle = create(str(path), 0x80000000, 0x1, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        attributes = (ctypes.c_uint32 * 2)()  # FILE_ATTRIBUTE_TAG_INFO
+        if not query(handle, 9, ctypes.byref(attributes), ctypes.sizeof(attributes)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if attributes[0] & 0x400:
+            raise SharedError("Links and reparse points are not shared")
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except BaseException:
+        close(handle)
+        raise
+    # open_osfhandle owns the Win32 handle after successful conversion.
+    return descriptor
 
 
 def _parts(value: str, *, root_allowed: bool = True) -> tuple[str, ...]:
@@ -95,7 +126,7 @@ class _Directory:
         if self.fd is not None:
             descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)
         else:
-            descriptor = os.open(self.path / name, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+            descriptor = _open_windows_shared_file(self.path / name)
         actual = os.fstat(descriptor)
         if (not stat.S_ISREG(actual.st_mode) or actual.st_nlink > 1
                 or (status.st_dev, status.st_ino) != (actual.st_dev, actual.st_ino)):
@@ -189,7 +220,6 @@ class SharedRead:
     def __init__(self, descriptor: int, relative_path: str, directory: _Directory, name: str):
         self.directory, self.name = directory, name
         self.stream = None
-        self._reopen = _reopen_between_shared_reads()
         self._closed = False
         self.path = relative_path
         self.offset = 0
@@ -197,10 +227,6 @@ class SharedRead:
         try:
             self.stream = self._wrap_descriptor(descriptor)
             handle = os.fstat(self.stream.fileno())
-            if self._reopen:
-                # Capture the baseline only after closing the initial Windows
-                # handle, so any pending NTFS version information is committed.
-                self._close_stream()
             self.status = directory.status(name)
             self.size = self.status.st_size
             if (handle.st_dev, handle.st_ino) != (self.status.st_dev, self.status.st_ino):
@@ -238,32 +264,12 @@ class SharedRead:
                 or version(current) != version(self.status)):
             raise SharedError("Shared file changed during download")
 
-    def _read_reopened(self, length):
-        self._check_metadata()
-        self.stream = self._wrap_descriptor(self.directory.open_file(self.name))
-        try:
-            handle = os.fstat(self.stream.fileno())
-            if (handle.st_dev, handle.st_ino) != (self.status.st_dev, self.status.st_ino):
-                raise SharedError("Shared file changed during download")
-            self._check_metadata()
-            self.stream.seek(self.offset)
-            block = self.stream.read(length)
-        finally:
-            # Direct Windows FileBasicInfo/ChangeTime queries also remain stale
-            # while this handle is open. Check the path AFTER releasing it.
-            self._close_stream()
-        self._check_metadata()
-        return block
-
     def read(self, offset, length):
         if type(offset) is not int or offset != self.offset or type(length) is not int or not 1 <= length <= CHUNK_SIZE:
             raise SharedError("Invalid shared-file read range")
-        if self._reopen:
-            block = self._read_reopened(min(length, self.size - self.offset))
-        else:
-            self._check_metadata()
-            block = self.stream.read(min(length, self.size - self.offset))
-            self._check_metadata()
+        self._check_metadata()
+        block = self.stream.read(min(length, self.size - self.offset))
+        self._check_metadata()
         self.offset += len(block)
         self.digest.update(block)
         if not block and self.offset != self.size:

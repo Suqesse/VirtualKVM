@@ -8,7 +8,7 @@ import time
 import unittest
 
 from virtualkvm.control import HostServer, ViewerClient, ProtocolError
-from virtualkvm.shared import SharedDirectory, SharedError, SharedRead
+from virtualkvm.shared import SharedDirectory, SharedError, _open_windows_shared_file
 
 
 class SharedTests(unittest.TestCase):
@@ -155,9 +155,20 @@ class SharedTests(unittest.TestCase):
         source.write_bytes(b"a" * (128 * 1024))
         client._request("shared_read_begin", path="changing")
         client._request("shared_read", offset=0, length=64 * 1024)
-        source.write_bytes(b"b" * (128 * 1024))
-        with self.assertRaisesRegex(ProtocolError, "changed"):
-            client._request("shared_read", offset=64 * 1024, length=64 * 1024)
+        if os.name == "nt":
+            # Windows enforces an immutable source handle: attempted writes
+            # fail before truncation, and the reader finishes the original file.
+            with self.assertRaises(PermissionError):
+                source.write_bytes(b"b" * (128 * 1024))
+            final = client._request("shared_read", offset=64 * 1024, length=64 * 1024)
+            self.assertEqual(base64.b64decode(final["data"]), b"a" * (64 * 1024))
+            self.assertTrue(final["eof"])
+            self.assertEqual(final["sha256"], hashlib.sha256(b"a" * (128 * 1024)).hexdigest())
+            source.write_bytes(b"b" * (128 * 1024))  # EOF releases the lock.
+        else:
+            source.write_bytes(b"b" * (128 * 1024))
+            with self.assertRaisesRegex(ProtocolError, "changed"):
+                client._request("shared_read", offset=64 * 1024, length=64 * 1024)
         client._request("shared_write_begin", path="bad", size=1)
         client._request("shared_write_chunk", data=base64.b64encode(b"x").decode())
         with self.assertRaisesRegex(ProtocolError, "SHA-256"):
@@ -171,8 +182,8 @@ class SharedTests(unittest.TestCase):
         source = self.share / "cached-stat"
         original = b"a" * (128 * 1024)
         # Exercise unread data and an already-delivered region. In the second
-        # case the transferred bytes would still match the original; fresh
-        # nofollow path metadata must detect the edit despite cached fstat.
+        # case the remaining bytes would still match the original. Windows
+        # must deny the write; POSIX must detect it despite cached fstat.
         for replacement in (b"b" * len(original), b"b" * (64 * 1024) + original[64 * 1024:]):
             with self.subTest(already_sent_only=replacement[64 * 1024:] == original[64 * 1024:]):
                 source.write_bytes(original)
@@ -181,59 +192,64 @@ class SharedTests(unittest.TestCase):
                     client._request("shared_read_begin", path="cached-stat")
                     first = client._request("shared_read", offset=0, length=64 * 1024)
                     self.assertEqual(base64.b64decode(first["data"]), original[:64 * 1024])
-                    source.write_bytes(replacement)
-                    active = self.host._session.transfer
-                    diagnostic = (f"initial metadata={active.status!r}; "
-                                  f"fresh metadata={active.directory.status(active.name)!r}; "
-                                  f"read handle retained={active.stream is not None}")
-                    with self.assertRaisesRegex(ProtocolError, "changed", msg=diagnostic):
-                        client._request("shared_read", offset=64 * 1024, length=64 * 1024)
+                    if os.name == "nt":
+                        with self.assertRaises(PermissionError):
+                            source.write_bytes(replacement)
+                        final = client._request("shared_read", offset=64 * 1024, length=64 * 1024)
+                        self.assertEqual(base64.b64decode(final["data"]), original[64 * 1024:])
+                        self.assertTrue(final["eof"])
+                        self.assertEqual(final["sha256"], hashlib.sha256(original).hexdigest())
+                    else:
+                        source.write_bytes(replacement)
+                        with self.assertRaisesRegex(ProtocolError, "changed"):
+                            client._request("shared_read", offset=64 * 1024, length=64 * 1024)
         # Both failures must close their transfer and leave the session usable.
         client.shared_download("hello.txt", self.root / "after-mutation.txt")
         self.assertEqual((self.root / "after-mutation.txt").read_bytes(), (self.share / "hello.txt").read_bytes())
 
-    def test_windows_reader_releases_handles_that_keep_ntfs_metadata_stale(self):
+    def test_windows_shared_handle_denies_write_delete_and_transfers_ownership(self):
+        import ctypes
+        import types
         from unittest.mock import Mock, patch
-        source = self.share / "handle-version"
-        original = b"a" * (128 * 1024)
-        for replacement in (b"b" * len(original), b"b" * (64 * 1024) + original[64 * 1024:]):
-            source.write_bytes(original)
-            cached = source.stat()
-            directory = Mock()
-            active_handles = set()
-            real_fdopen = os.fdopen
-            class TrackedReader:
-                def __init__(self, stream):
-                    self.stream = stream
-                    active_handles.add(self)
-                def __getattr__(self, name):
-                    return getattr(self.stream, name)
-                def close(self):
-                    try:
-                        self.stream.close()
-                    finally:
-                        active_handles.discard(self)
-            # Model the native failure: all metadata queries return the old
-            # version while our read handle is retained, including ChangeTime.
-            directory.status.side_effect = lambda _: cached if active_handles else source.stat()
-            directory.open_file.side_effect = lambda _: os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0))
-            with patch("virtualkvm.shared.os.fstat", return_value=cached), \
-                    patch("virtualkvm.shared._reopen_between_shared_reads", return_value=True), \
-                    patch("virtualkvm.shared.os.fdopen", side_effect=lambda *args, **kwargs: TrackedReader(real_fdopen(*args, **kwargs))):
-                reader = SharedRead(os.open(source, os.O_RDONLY | getattr(os, "O_BINARY", 0)),
-                                    "handle-version", directory, source.name)
-                try:
-                    self.assertFalse(active_handles)
-                    first, _ = reader.read(0, 64 * 1024)
-                    self.assertEqual(first, original[:64 * 1024])
-                    self.assertFalse(active_handles)
-                    source.write_bytes(replacement)
-                    with self.assertRaisesRegex(SharedError, "changed"):
-                        reader.read(64 * 1024, 64 * 1024)
-                finally:
-                    reader.close()
-                self.assertFalse(active_handles)
-            directory.close.assert_called_once()
+        kernel = Mock()
+        kernel.CreateFileW.return_value = 1234
+        def attribute_info(handle, kind, target, size):
+            ctypes.cast(target, ctypes.POINTER(ctypes.c_uint32))[0] = 0x80
+            return 1
+        kernel.GetFileInformationByHandleEx.side_effect = attribute_info
+        conversion = Mock(return_value=123)
+        with patch("ctypes.WinDLL", return_value=kernel, create=True), \
+                patch.dict("sys.modules", {"msvcrt": types.SimpleNamespace(open_osfhandle=conversion)}):
+            self.assertEqual(_open_windows_shared_file(self.share / "hello.txt"), 123)
+            arguments = kernel.CreateFileW.call_args.args
+            self.assertEqual(arguments[1], 0x80000000)  # GENERIC_READ
+            self.assertEqual(arguments[2], 0x1)  # READ sharing, no WRITE/DELETE
+            self.assertEqual(arguments[4], 3)  # OPEN_EXISTING
+            self.assertTrue(arguments[5] & 0x00200000)  # OPEN_REPARSE_POINT
+            conversion.assert_called_once_with(1234, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+            kernel.CloseHandle.assert_not_called()  # CRT descriptor owns it.
+            conversion.side_effect = OSError("descriptor allocation failed")
+            with self.assertRaises(OSError):
+                _open_windows_shared_file(self.share / "hello.txt")
+            kernel.CloseHandle.assert_called_once_with(1234)
+
+    @unittest.skipUnless(os.name == "nt", "Verifies native Windows file-sharing enforcement")
+    def test_windows_download_lock_blocks_replacement_and_is_released_on_disconnect(self):
+        client = self.connect()
+        source = self.share / "locked.bin"
+        source.write_bytes(b"a" * (128 * 1024))
+        client._request("shared_read_begin", path="locked.bin")
+        client._request("shared_read", offset=0, length=64 * 1024)
+        with self.assertRaises(PermissionError):
+            source.unlink()
+        with self.assertRaises(PermissionError):
+            source.rename(self.share / "renamed.bin")
+        client.disconnect()
+        deadline = time.monotonic() + 2
+        while self.host.sessions and time.monotonic() < deadline:
+            time.sleep(0.01)
+        source.rename(self.share / "renamed.bin")
+        (self.share / "renamed.bin").unlink()
 
     def test_directory_listing_is_bounded(self):
         from unittest.mock import patch

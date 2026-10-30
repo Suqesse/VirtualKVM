@@ -95,14 +95,6 @@ def _resolve_dependency(reference, source, executable, rpaths):
     raise BundleError(f"Cannot resolve {reference!r} required by {source}; supply a complete native FFmpeg installation")
 
 
-def _strip_signature(path):
-    try:
-        _run(["codesign", "--remove-signature", path])
-    except BundleError as error:
-        if "not signed at all" not in str(error).lower():
-            raise
-
-
 def _sign(path):
     identity = os.environ.get("MACOS_APP_SIGN_IDENTITY", "").strip()
     arguments = ["codesign", "--force", "--sign", identity or "-"]
@@ -167,13 +159,18 @@ def _relocate_macos(runtime: Path, executables: dict[Path, Path]):
             relative = os.path.relpath(destinations[dependency], destinations[source].parent).replace(os.sep, "/")
             edges.append((reference, "@loader_path/" + relative))
     for source, destination in destinations.items():
-        _strip_signature(destination)
+        # Preserve the existing signature's Mach-O layout while rewriting.
+        # codesign --remove-signature can leave an invalid __LINKEDIT segment;
+        # PyInstaller follows the same rewrite-then-force-sign ordering.
+        command = ["install_name_tool"]
         for reference, replacement in graph[source]:
-            _run(["install_name_tool", "-change", reference, replacement, destination])
+            command += ["-change", reference, replacement]
         if source not in executables:
-            _run(["install_name_tool", "-id", "@loader_path/" + destination.name, destination])
+            command += ["-id", "@loader_path/" + destination.name]
         for rpath in original_rpaths[source]:
-            _run(["install_name_tool", "-delete_rpath", rpath, destination])
+            command += ["-delete_rpath", rpath]
+        if len(command) > 1:
+            _run([*command, destination])
     # Sign nested libraries first, then executable helpers. Public signing
     # identities are accepted through the same release environment as the app.
     ordered = [p for s, p in destinations.items() if s not in executables] + list(executables.values())
