@@ -12,6 +12,7 @@ def main():
     faulthandler.dump_traceback_later(60, repeat=True)
     try:
         root = Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(root))
         suite = unittest.defaultTestLoader.discover(str(root / "tests"))
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return 0 if result.testsRun > 0 and result.wasSuccessful() else 1

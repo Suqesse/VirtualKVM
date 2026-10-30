@@ -77,7 +77,13 @@ def main(argv=None):
         report["checks"].append(entry)
         print(f"{name}: {'PASS' if entry['passed'] else 'FAIL'} ({entry['seconds']}s)", flush=True)
         if not entry["passed"]:
-            print(log_path.read_text(encoding="utf-8", errors="replace")[-18000:], flush=True)
+            failure_log = log_path.read_text(encoding="utf-8", errors="replace")
+            if name == "tests" and environment.get("GITHUB_ACTIONS") == "true":
+                failures = re.findall(r"\n={10,}\n((?:ERROR|FAIL):.*?)(?=\n={10,}\n|\n-{10,}\nRan |\Z)", failure_log, flags=re.DOTALL)
+                for failure in failures:
+                    message = failure[:3900].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                    print(f"::error title=Native test failure::{message}", flush=True)
+            print(failure_log[-18000:], flush=True)
             break
     report["passed"] = len(report["checks"]) == len(commands) and all(c["passed"] for c in report["checks"])
     target = output / "report.json"
