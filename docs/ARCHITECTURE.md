@@ -1,6 +1,6 @@
 # Architecture
 
-VirtualKVM 0.1.0 is a pilot application that separates the desktop control plane from media transport. Python coordinates platform APIs, networking, and the PySide6 interface; FFmpeg supplies native capture, H.264/HEVC encoding, AAC, SRT, decoding, and remuxing. The application does not implement a display driver.
+VirtualKVM 0.2.0 is a pilot application that separates the desktop control plane from media transport. Python coordinates platform APIs, networking, and the PySide6 interface; FFmpeg supplies native capture, H.264/HEVC encoding, AAC, SRT, decoding, and remuxing. The application does not implement a display driver.
 
 ## Components
 
@@ -12,6 +12,8 @@ VirtualKVM 0.1.0 is a pilot application that separates the desktop control plane
 | `security.py` | Persisted host certificate, SHA-256 certificate fingerprint, pairing proof |
 | `media.py` | FFmpeg discovery, audio/video capture, encrypted SRT sender, RGB receiver and timestamp-preserving A/V relay |
 | `native.py` | Display enumeration, Windows/macOS input injection, release of held input, platform permissions |
+| `display_layout.py` | Validated source inventory, 1–8 unique sources, receiving-window coordinates and preference schema |
+| `display_gui.py` | Draggable topology editor, exact X/Y, presets and mapping onto distinct local Qt screens |
 | `gui.py` | Russian host/connect interface, profiles, video/A/V windows, explicit input/clipboard and shared-folder controls |
 | `__main__.py` | GUI entry point, diagnostics, headless host, synthetic smoke test |
 
@@ -41,6 +43,10 @@ sequenceDiagram
 The host derives the video destination from the authenticated control peer rather than trusting an arbitrary destination supplied by a message. Each display has its own stream and encryption key. Control is carried on TCP, default port 24800; video uses negotiated UDP ports at the viewer.
 
 Only an authenticated controlling session may inject input or negotiate streams. Replacing or losing that session tears down its streams and releases held input. Focus loss and the emergency shortcut also request input release. Network-loss handling must be bounded by the protocol's heartbeat/disconnect handling, not by waiting indefinitely for a user action.
+
+The authenticated response advertises optional capabilities (`max_streams: 8`, `preserve_aspect: true`) without changing protocol version 1. A new viewer defaults to two streams and omits the new scaling option when connecting to a legacy host. Authenticated discovery reads the source inventory and disconnects without requesting capture.
+
+Source desktop geometry and receiving placement are separate. Source coordinates remain authoritative for capture and pointer injection, including negative coordinates, Retina logical points and portrait pixel orientation. The viewer either fits its saved relative window layout into its primary available work area or maps each source to a distinct connected local `QScreen`, optionally fullscreen. Neither path changes OS monitor settings or creates virtual displays. Profiles migrate older two-screen selections; unavailable source/target IDs and duplicate assignments are rejected.
 
 ## Trust and framing
 
@@ -74,7 +80,7 @@ Preserved timestamps and a shared player clock establish the synchronization mec
 
 Stream width and height are integers from 1 through 16384. Odd dimensions are rounded up for codec input by padding the right/bottom edge, with a coded-area limit of 67,108,864 pixels. The RGB receiver crops back to the requested viewport. A/V playback may show the extra one-pixel edge because it presents the coded video. A codec or GPU can impose tighter limits than configuration validation.
 
-Frame rate is 1–240 FPS, bitrate is 1–500 Mbit/s per stream, and SRT latency is 10–2000 ms. The source-resolution option is resolved on the host separately for each selected display. Custom output dimensions scale captured pixels; they do not create virtual displays or raise a physical monitor's refresh rate.
+Frame rate is 1–240 FPS, bitrate is 1–500 Mbit/s per stream, and SRT latency is 10–2000 ms. The source-resolution option is resolved on the host separately for each selected display. Otherwise the GUI defaults to preserving each source’s pixel aspect ratio within the requested bounds, so landscape and portrait sources can share one quality profile without stretching. Exact custom dimensions remain available by disabling that option. Custom output dimensions scale captured pixels; they do not create virtual displays or raise a physical monitor's refresh rate.
 
 GUI profiles are Gaming (1920×1080/240 FPS, 45 Mbit/s, 30 ms SRT), Office (1920×1080/60 FPS, 16 Mbit/s, 60 ms), and Quality (3840×2160/60 FPS, 60 Mbit/s, 60 ms), plus a custom profile. Non-secret preferences may persist; PINs, stream keys, and trusted certificate fingerprints are not persisted as ordinary GUI preferences.
 

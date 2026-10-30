@@ -482,7 +482,7 @@ class _FFmpegProcess:
 
 
 class VideoSender(_FFmpegProcess):
-    """One captured monitor per encrypted stream. Instantiate twice for two screens."""
+    """One captured monitor per encrypted stream; one instance per selected source."""
 
     def __init__(self, locator: FFmpegLocator | None = None):
         super().__init__(locator)

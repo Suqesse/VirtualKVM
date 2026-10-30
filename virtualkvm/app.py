@@ -12,6 +12,7 @@ import threading
 from .control import HostServer, ViewerClient
 from .media import AVReceiver, CaptureSource, StreamConfig, VideoReceiver, VideoSender
 from .native import NativeInput, list_displays
+from .display_layout import MAX_STREAMS, display_inventory
 
 
 def default_state_dir() -> Path:
@@ -96,18 +97,21 @@ class HostController:
 
     def _prepare_streams(self, request):
         indexes, options = request.get("displays"), request.get("config")
-        if (not isinstance(indexes, list) or not 1 <= len(indexes) <= 2
+        if (not isinstance(indexes, list) or not 1 <= len(indexes) <= MAX_STREAMS
                 or any(type(i) is not int for i in indexes) or len(set(indexes)) != len(indexes)):
-            raise ValueError("Select one or two distinct displays")
+            raise ValueError("Select one to eight distinct displays")
         if not isinstance(options, dict):
             raise ValueError("Invalid stream configuration")
         allowed = {f.name for f in fields(StreamConfig)}
-        if set(options) - allowed - {"receiver_ports", "source_resolution"}:
+        if set(options) - allowed - {"receiver_ports", "source_resolution", "preserve_aspect"}:
             raise ValueError("Unknown stream setting")
         config = StreamConfig(**{k: v for k, v in options.items() if k in allowed})
         source_resolution = options.get("source_resolution", False)
         if type(source_resolution) is not bool:
             raise ValueError("source_resolution must be a boolean")
+        preserve_aspect = options.get("preserve_aspect", False)
+        if type(preserve_aspect) is not bool:
+            raise ValueError("preserve_aspect must be a boolean")
         if config.audio and not self.synthetic and not self.audio_device:
             raise ValueError("Choose a host audio capture device before enabling sound")
         destination = str(ipaddress.ip_address(request["_peer_host"]))
@@ -123,9 +127,16 @@ class HostController:
             if any(s["port"] == port for s in streams):
                 raise ValueError("Each display needs a distinct UDP port")
             display = available[index]
+            width, height = config.width, config.height
+            source_width = display.get("pixel_width") or display["width"]
+            source_height = display.get("pixel_height") or display["height"]
+            if source_resolution:
+                width, height = source_width, source_height
+            elif preserve_aspect:
+                ratio = min(width / source_width, height / source_height)
+                width, height = max(1, round(source_width * ratio)), max(1, round(source_height * ratio))
             stream_config = replace(config,
-                width=(display.get("pixel_width") or display["width"]) if source_resolution else config.width,
-                height=(display.get("pixel_height") or display["height"]) if source_resolution else config.height,
+                width=width, height=height,
                 audio=config.audio and index == indexes[0], audio_device=self.audio_device)
             source = CaptureSource(index=index, x=display["x"], y=display["y"],
                                    width=display["width"], height=display["height"])
@@ -190,6 +201,17 @@ class HostController:
 
 
 class ViewerController:
+    @staticmethod
+    def discover_displays(state_dir, host, port, pin, fingerprint):
+        """Authenticate and read the host inventory without starting capture."""
+        client = ViewerClient(Path(state_dir))
+        try:
+            client.connect(host, port, pin, fingerprint)
+            display_inventory(client.displays)
+            return list(client.displays)
+        finally:
+            client.disconnect()
+
     def __init__(self, state_dir=None, on_status=None, on_frame=None, on_clipboard=None, on_media=None):
         self.on_status = on_status or (lambda _: None)
         self.on_frame = on_frame or (lambda *_: None)
@@ -231,6 +253,10 @@ class ViewerController:
                 ports[str(index)] = sock.getsockname()[1]
             options["receiver_ports"] = ports
             self.client.connect(host, port, pin, fingerprint)
+            if len(indexes) > self.client.capabilities["max_streams"]:
+                raise ValueError("Хост поддерживает меньше экранов. Обновите приложение на хосте или сократите выбор.")
+            if not self.client.capabilities["preserve_aspect"]:
+                options.pop("preserve_aspect", None)
             response = self.client.request_stream(indexes, options)
             self.displays = response.get("displays", [])
             for reservation in reservations:

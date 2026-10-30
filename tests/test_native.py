@@ -198,6 +198,24 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual((displays[1].x, displays[1].width), (-1440, 1440))
         self.assertEqual((displays[1].pixel_width, displays[1].pixel_height), (2880, 1800))
 
+    @patch("virtualkvm.native.platform.system", return_value="Darwin")
+    def test_mac_portrait_retina_pixels_follow_desktop_orientation(self, _):
+        bounds = SimpleNamespace(origin=SimpleNamespace(x=-900, y=120),
+                                 size=SimpleNamespace(width=900, height=1440))
+        quartz = SimpleNamespace(CGGetActiveDisplayList=lambda *_: (0, [9], 1),
+                                 CGMainDisplayID=lambda: 9, CGDisplayBounds=lambda _: bounds,
+                                 CGDisplayCopyDisplayMode=lambda _: object(),
+                                 CGDisplayModeGetPixelHeight=lambda _: 1800)
+        for raw_width, raw_height in ((2880, 1800), (1800, 2880)):
+            with self.subTest(mode=(raw_width, raw_height)):
+                quartz.CGDisplayModeGetPixelWidth = lambda _: raw_width
+                quartz.CGDisplayModeGetPixelHeight = lambda _: raw_height
+                with patch("virtualkvm.native._quartz", return_value=quartz):
+                    display = native.list_displays()[0]
+                self.assertEqual((display.x, display.y, display.width, display.height),
+                                 (-900, 120, 900, 1440))
+                self.assertEqual((display.pixel_width, display.pixel_height), (1800, 2880))
+
 
 class MacInputTests(unittest.TestCase):
     def setUp(self):

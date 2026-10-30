@@ -23,6 +23,7 @@ from typing import Callable
 from .security import SecurityError, connect_pinned, pairing_proof, server_identity
 from .shared import SharedDirectory, SharedRead, SharedUpload
 from .transport import TLSConnection
+from .display_layout import MAX_STREAMS
 
 MAX_MESSAGE = 1024 * 1024
 MAX_FILE_SIZE = 1024 * 1024 * 1024
@@ -334,7 +335,8 @@ class HostServer:
                     return
                 self._session = session
             session.send({"type": "authenticated", "version": 1, "displays": self.displays,
-                          "shared": self.shared.info})
+                          "shared": self.shared.info,
+                          "capabilities": {"max_streams": MAX_STREAMS, "preserve_aspect": True}})
             # An unresponsive peer must release remote keys within a bounded
             # interval, including cable loss where TCP has not reported EOF.
             connection.settimeout(10)
@@ -510,6 +512,7 @@ class ViewerClient:
         self.on_clipboard, self.on_status = on_clipboard, on_status
         self.displays = []
         self.shared_info = {"enabled": False, "writable": False, "name": ""}
+        self.capabilities = {"max_streams": 2, "preserve_aspect": False}
         self._transfer_lock = threading.Lock()
         self._connection: ssl.SSLSocket | None = None
         self._send_lock = threading.Lock()
@@ -538,6 +541,14 @@ class ViewerClient:
             if response.get("type") != "authenticated" or response.get("version") != 1:
                 raise SecurityError(response.get("error", "Pairing failed"))
             self.displays = response.get("displays", [])
+            capabilities = response.get("capabilities", {})
+            if not isinstance(capabilities, dict):
+                raise ProtocolError("Invalid host capabilities")
+            maximum = capabilities.get("max_streams", 2)
+            if type(maximum) is not int or not 1 <= maximum <= MAX_STREAMS:
+                raise ProtocolError("Invalid host display limit")
+            self.capabilities = {"max_streams": maximum,
+                                 "preserve_aspect": capabilities.get("preserve_aspect") is True}
             self.shared_info = response.get("shared", {"enabled": False, "writable": False, "name": ""})
             connection.settimeout(10)
             self._connection = connection

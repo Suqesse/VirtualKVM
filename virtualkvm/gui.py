@@ -33,6 +33,10 @@ from PySide6.QtWidgets import (
 )
 
 
+from .display_gui import DisplayMap, MonitorPanel, local_screens
+from .display_layout import MAX_STREAMS, Placement, arrange, display_inventory, fit_windows
+
+
 class _Bridge(QObject):
     status = Signal(str)
     clipboard = Signal(str)
@@ -135,44 +139,47 @@ _SHIFTED_BASE = {
 }
 
 _STYLE = """
-QMainWindow, QWidget#workspace { background: #0b1220; color: #e7edf7; }
-QWidget { font-family: "Segoe UI", "Helvetica Neue", sans-serif; font-size: 13px; color: #e7edf7; }
-QLabel#brandTitle { font-size: 29px; font-weight: 700; letter-spacing: 1px; }
-QLabel#brandMark { background: #32d8bb; color: #062b2b; border-radius: 17px; font-size: 23px; font-weight: 800; }
-QLabel#muted { color: #95a7bf; font-size: 12px; }
-QLabel#connectionBadge { background: #152c38; color: #60e4ca; border: 1px solid #234b50; border-radius: 15px; padding: 9px 15px; }
-QTabWidget::pane { background: #101c2e; border: 1px solid #223149; border-radius: 16px; top: -1px; }
-QTabBar::tab { background: #101c2e; color: #9fb1ca; padding: 13px 26px; border: 1px solid #223149; border-bottom: 0; border-top-left-radius: 9px; border-top-right-radius: 9px; margin-right: 5px; }
-QTabBar::tab:selected { background: #1b3348; color: #6ce8d0; border-color: #315169; }
-QGroupBox { background: #132238; border: 1px solid #273951; border-radius: 12px; margin-top: 19px; padding: 22px 16px 15px; }
-QGroupBox::title { color: #7ee7d2; subcontrol-origin: margin; subcontrol-position: top left; left: 16px; padding: 0 6px; font-weight: 600; }
-QLineEdit, QSpinBox, QComboBox { min-height: 33px; background: #0c1829; border: 1px solid #32445e; border-radius: 7px; padding: 0 9px; selection-background-color: #247d76; }
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #45c9b5; }
-QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled { color: #6f829b; border-color: #223047; background: #111c2d; }
+QMainWindow, QWidget#workspace, QDialog { background: #f5f6f8; color: #252c36; }
+QWidget { font-size: 13px; color: #252c36; }
+QLabel#brandTitle { font-size: 23px; font-weight: 600; }
+QLabel#brandMark { background: #66778e; color: #ffffff; border-radius: 8px; font-size: 15px; font-weight: 600; }
+QLabel#muted { color: #697380; font-size: 12px; }
+QLabel#validationError { color: #9a4145; font-size: 12px; }
+QLabel#connectionBadge { background: #e9edf2; color: #526174; border: 1px solid #dce1e8; border-radius: 7px; padding: 7px 12px; }
+QTabWidget::pane { background: #f5f6f8; border: 1px solid #dce1e8; border-radius: 10px; top: -1px; }
+QTabBar::tab { background: #edf0f3; color: #697380; padding: 11px 22px; border: 1px solid #dce1e8; border-bottom: 0; border-top-left-radius: 7px; border-top-right-radius: 7px; margin-right: 4px; }
+QTabBar::tab:selected { background: #ffffff; color: #303b4c; }
+QGroupBox { background: #ffffff; border: 1px solid #dce1e8; border-radius: 9px; margin-top: 17px; padding: 20px 15px 13px; }
+QGroupBox::title { color: #404c5d; subcontrol-origin: margin; subcontrol-position: top left; left: 14px; padding: 0 5px; font-weight: 600; }
+QLineEdit, QSpinBox, QComboBox { min-height: 32px; background: #ffffff; border: 1px solid #cbd1da; border-radius: 6px; padding: 0 8px; selection-background-color: #d6dfec; selection-color: #252c36; }
+QAbstractSpinBox QLineEdit { min-height: 0; border: none; border-radius: 0; background: transparent; padding: 0 8px; }
+QSpinBox::up-button, QSpinBox::down-button { width: 0; height: 0; border: none; }
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: #667e9d; }
+QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled { color: #89919b; border-color: #e1e4e9; background: #f2f4f6; }
 QComboBox::drop-down { width: 21px; border: 0; }
-QComboBox QAbstractItemView { background: #14253b; color: #e7edf7; selection-background-color: #26685f; }
-QPushButton { min-height: 35px; padding: 0 15px; border: 1px solid #3a506a; border-radius: 7px; background: #1c314b; font-weight: 500; }
-QPushButton:hover { background: #29445f; border-color: #627f9d; }
-QPushButton:pressed { background: #132b40; }
-QPushButton:disabled { color: #63758b; background: #142137; border-color: #24344a; }
-QPushButton#primaryButton { background: #40d6bb; color: #052e2e; border: 1px solid #40d6bb; min-width: 150px; font-weight: 700; }
-QPushButton#primaryButton:hover { background: #6ee8d0; }
-QPushButton#primaryButton:disabled { background: #25554f; color: #789c96; border-color: #25554f; }
-QPushButton#dangerButton { color: #f5b1b8; border-color: #7b4654; background: #382332; }
-QCheckBox { spacing: 9px; padding: 5px 0; }
-QCheckBox::indicator { width: 17px; height: 17px; background: #0c1829; border: 1px solid #536c87; border-radius: 4px; }
-QCheckBox::indicator:checked { background: #3dd7b8; border: 1px solid #3dd7b8; image: none; }
-QCheckBox:disabled { color: #7b8ca3; }
-QPlainTextEdit { background: #07101c; border: 1px solid #2a3c55; border-radius: 8px; padding: 9px; font-family: monospace; font-size: 11px; }
-QToolButton { background: transparent; border: none; padding: 5px; color: #9fb1ca; }
-QToolBar { background: #101c2e; border: none; spacing: 8px; padding: 7px; }
-QStatusBar { background: #101c2e; color: #9fb1ca; }
-QTableWidget, QTreeWidget { background: #101c2e; alternate-background-color: #14253b; border: 1px solid #2a3c55; gridline-color: #273951; }
-QHeaderView::section { background: #1d324b; color: #b9cce2; padding: 8px; border: none; }
-QDialog { background: #101c2e; }
-QScrollBar:vertical { width: 10px; background: #101c2e; }
-QScrollBar::handle:vertical { background: #3d536e; border-radius: 4px; min-height: 25px; }
-"""
+QComboBox QAbstractItemView { background: #ffffff; color: #252c36; selection-background-color: #e4eaf2; }
+QPushButton { min-height: 33px; padding: 0 13px; border: 1px solid #cbd1da; border-radius: 6px; background: #ffffff; font-weight: 500; }
+QPushButton:hover { background: #eef1f5; border-color: #aab5c4; }
+QPushButton:pressed { background: #e1e6ee; }
+QPushButton:disabled { color: #929aa5; background: #f1f3f6; border-color: #e0e4ea; }
+QPushButton#primaryButton { background: #586e8b; color: #ffffff; border-color: #586e8b; min-width: 138px; font-weight: 600; }
+QPushButton#primaryButton:hover { background: #485e7b; }
+QPushButton#primaryButton:disabled { background: #c4ccd7; color: #ffffff; border-color: #c4ccd7; }
+QPushButton#dangerButton { color: #8c454a; border-color: #dfc9cb; background: #fcf7f7; }
+QCheckBox { spacing: 8px; padding: 4px 0; }
+QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #a6b0bf; border-radius: 4px; background: #ffffff; }
+QCheckBox::indicator:checked { background: #697f9d; border-color: #697f9d; image: url("__CHECK_ICON__"); }
+QCheckBox:disabled { color: #89919b; }
+QPlainTextEdit { background: #ffffff; border: 1px solid #dce1e8; border-radius: 6px; padding: 8px; font-family: monospace; font-size: 11px; }
+QToolButton { background: transparent; border: none; padding: 5px; color: #58697e; }
+QToolBar { background: #f3f5f8; border: none; spacing: 8px; padding: 7px; }
+QStatusBar { background: #f3f5f8; color: #697380; }
+QTableWidget, QTreeWidget { background: #ffffff; alternate-background-color: #f7f8fa; border: 1px solid #dce1e8; gridline-color: #e6e9ed; }
+QHeaderView::section { background: #eef1f5; color: #536073; padding: 7px; border: none; }
+QScrollArea { background: #f5f6f8; }
+QScrollBar:vertical { width: 10px; background: #f1f3f6; }
+QScrollBar::handle:vertical { background: #c0c8d3; border-radius: 4px; min-height: 25px; }
+""".replace("__CHECK_ICON__", (Path(__file__).parent / "assets/check.svg").as_posix())
 
 
 def normalized_key(event: QKeyEvent) -> str | None:
@@ -208,7 +215,7 @@ class VideoCanvas(QWidget):
         self._pressed_buttons: set[str] = set()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
-        self.setMinimumSize(320, 180)
+        self.setMinimumSize(160, 90)
 
     def set_frame(self, rgb: bytes, width: int, height: int) -> None:
         if width <= 0 or height <= 0 or len(rgb) != width * height * 3:
@@ -497,6 +504,8 @@ class MainWindow(QMainWindow):
         self._clipboard_pending: str | None = None
         self._clipboard_busy = False
         self._requested_displays = []
+        self._scanning_displays = False
+        self._known_peer = None
         self._stats_at = time.monotonic()
         self._stats_samples = {}
         self._applying_profile = False
@@ -509,22 +518,19 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         central.setObjectName("workspace")
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(30, 24, 30, 20)
-        layout.setSpacing(18)
+        layout.setContentsMargins(24, 20, 24, 18)
+        layout.setSpacing(14)
         heading = QHBoxLayout()
         mark = QLabel("VK")
         mark.setObjectName("brandMark")
-        mark.setFixedSize(58, 58)
+        mark.setFixedSize(38, 38)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         heading.addWidget(mark)
         brand = QVBoxLayout()
         brand.setSpacing(2)
         title = QLabel("VirtualKVM")
         title.setObjectName("brandTitle")
-        subtitle = QLabel("Два компьютера. Одно рабочее место.")
-        subtitle.setObjectName("muted")
         brand.addWidget(title)
-        brand.addWidget(subtitle)
         heading.addLayout(brand)
         heading.addStretch()
         self.connection_badge = QLabel("●  Готов к подключению")
@@ -593,10 +599,14 @@ class MainWindow(QMainWindow):
         self._stats_timer.timeout.connect(self._update_stats)
         self._stats_timer.start()
         self._load_preferences()
+        self.monitor_layout.changed.connect(self._save_preferences)
+        QTimer.singleShot(0, self._refresh_host_displays)
 
     @staticmethod
     def _spin(low: int, high: int, value: int, step: int = 1) -> QSpinBox:
         widget = QSpinBox()
+        widget.lineEdit().setTextMargins(8, 0, 8, 0)
+        widget.setToolTip("Введите значение или используйте клавиши ↑ и ↓.")
         widget.setRange(low, high)
         widget.setSingleStep(step)
         widget.setValue(value)
@@ -606,12 +616,9 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(22, 24, 22, 22)
-        intro = QLabel("<b>Сделайте этот компьютер доступным</b><br>Запустите хост и передайте данные подключения на второй компьютер.")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
         columns = QHBoxLayout()
         columns.setSpacing(22)
-        access = QGroupBox("01  ·  Подключение и доверие")
+        access = QGroupBox("Подключение")
         form = QFormLayout(access)
         form.setSpacing(14)
         self.host_bind = QLineEdit("0.0.0.0")
@@ -645,7 +652,7 @@ class MainWindow(QMainWindow):
         form.addRow("", copy_fingerprint)
         form.addRow(self.synthetic)
         columns.addWidget(access, 1)
-        extras = QGroupBox("02  ·  Звук и общая папка")
+        extras = QGroupBox("Звук и файлы")
         extra_form = QFormLayout(extras)
         extra_form.setSpacing(14)
         self.host_audio_device = QComboBox()
@@ -690,9 +697,21 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.host_stop)
         buttons.addStretch()
         layout.addLayout(buttons)
-        self.display_label = QLabel("После подключения партнёр сможет выбрать один или два экрана.")
+        self.display_label = QLabel("Можно передавать от 1 до 8 экранов, которые доступны в ОС.")
         self.display_label.setWordWrap(True)
         layout.addWidget(self.display_label)
+        self.host_map = DisplayMap()
+        self.host_map.setFixedHeight(160)
+        layout.addWidget(self.host_map)
+        refresh_displays = QPushButton("Обновить список экранов")
+        refresh_displays.clicked.connect(self._refresh_host_displays)
+        self.host_display_refresh = refresh_displays
+        layout.addWidget(refresh_displays)
+        screen_help = QLabel("Расположение и поворот экранов источника задаются в системных настройках Windows или macOS. "
+                             "После изменения конфигурации перезапустите хост.")
+        screen_help.setWordWrap(True)
+        screen_help.setObjectName("muted")
+        layout.addWidget(screen_help)
         note = QLabel("Сверьте полный отпечаток перед подключением. Полученные отдельные файлы: Downloads/VirtualKVM.")
         note.setWordWrap(True)
         note.setObjectName("muted")
@@ -703,12 +722,9 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(22, 24, 22, 22)
-        intro = QLabel("<b>Ваше рабочее место — на другом компьютере</b><br>Безопасное подключение, отдельное окно для каждого экрана.")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
         columns = QHBoxLayout()
         columns.setSpacing(22)
-        connection = QGroupBox("01  ·  Второй компьютер")
+        connection = QGroupBox("Хост")
         form = QFormLayout(connection)
         form.setSpacing(14)
         self.peer_host = QLineEdit()
@@ -722,32 +738,23 @@ class MainWindow(QMainWindow):
         form.addRow("Порт", self.peer_port)
         form.addRow("PIN", self.peer_pin)
         form.addRow("Отпечаток", self.peer_fingerprint)
-        sources = QHBoxLayout()
-        self.display_first = QCheckBox("Первый экран")
-        self.display_first.setChecked(True)
-        self.display_first.setEnabled(False)
-        self.display_first_index = self._spin(0, 63, 0)
-        self.display_second = QCheckBox("Второй экран")
-        self.display_second_index = self._spin(0, 63, 1)
-        sources.addWidget(self.display_first)
-        sources.addWidget(self.display_first_index)
-        sources.addWidget(self.display_second)
-        sources.addWidget(self.display_second_index)
-        form.addRow("Экраны хоста", sources)
         self.audio_enabled = QCheckBox("Передавать звук")
         form.addRow(self.audio_enabled)
-        audio_note = QLabel("Звук и видео используют общий тактовый источник. Звук передаётся с первого выбранного экрана.")
+        audio_note = QLabel("Звук синхронизирован с видео первой строки схемы экранов.")
         audio_note.setWordWrap(True)
         audio_note.setObjectName("muted")
         form.addRow(audio_note)
         columns.addWidget(connection, 1)
-        quality = QGroupBox("02  ·  Качество и скорость")
+        quality = QGroupBox("Изображение")
         quality_form = QFormLayout(quality)
         quality_form.setSpacing(12)
         self.profile = QComboBox()
         self.profile.addItems(["Игры · 240 FPS", "Работа · 60 FPS", "Качество · 4K / 60 FPS", "Свой профиль"])
-        self.native_resolution = QCheckBox("Родное разрешение источника")
+        self.native_resolution = QCheckBox("Родное разрешение каждого экрана")
         self.native_resolution.toggled.connect(self._resolution_mode)
+        self.preserve_aspect = QCheckBox("Сохранять пропорции экранов")
+        self.preserve_aspect.setChecked(True)
+        self.preserve_aspect.setToolTip("Горизонтальные и вертикальные экраны вписываются в выбранное разрешение без растяжения.")
         self.resolution_preset = QComboBox()
         resolutions = {(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160), (7680, 4320)}
         for screen in QApplication.screens():
@@ -773,20 +780,38 @@ class MainWindow(QMainWindow):
         self.codec.currentIndexChanged.connect(self._codec_changed)
         quality_form.addRow("Профиль", self.profile)
         quality_form.addRow(self.native_resolution)
+        quality_form.addRow(self.preserve_aspect)
         quality_form.addRow("Разрешение", self.resolution_preset)
         quality_form.addRow("Свой размер", resolution)
         quality_form.addRow("Частота · FPS", self.frame_rate)
-        quality_form.addRow("Кодек", self.codec)
-        quality_form.addRow("Видеокодер", self.encoder)
-        quality_form.addRow("Мбит/с на экран", self.bitrate)
-        quality_form.addRow("Буфер · мс", self.latency)
+        advanced = QGroupBox("Параметры кодирования")
+        advanced_form = QFormLayout(advanced)
+        advanced_form.addRow("Кодек", self.codec)
+        advanced_form.addRow("Видеокодер", self.encoder)
+        advanced_form.addRow("Мбит/с на экран", self.bitrate)
+        advanced_form.addRow("Буфер · мс", self.latency)
+        advanced.setVisible(False)
+        advanced_toggle = QToolButton()
+        advanced_toggle.setText("Дополнительные параметры")
+        advanced_toggle.setCheckable(True)
+        advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        advanced_toggle.toggled.connect(lambda checked: (advanced.setVisible(checked), advanced_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)))
+        quality_form.addRow(advanced_toggle)
+        quality_form.addRow(advanced)
         self.profile.currentIndexChanged.connect(self._apply_profile)
         self.resolution_preset.currentIndexChanged.connect(self._apply_resolution)
         self.resolution_preset.setCurrentIndex(self._resolution_index(1920, 1080))
         columns.addWidget(quality, 1)
         layout.addLayout(columns, 1)
-        target = QLabel("240 FPS — ваша цель. Фактическая частота зависит от разрешения, видеокарты, сети и мониторов. "
-                        "Счётчики приёма и вывода кадров доступны в окне каждого экрана.")
+        monitors = QGroupBox("Экраны")
+        monitor_form = QVBoxLayout(monitors)
+        self.monitor_layout = MonitorPanel()
+        self.monitor_layout.discover_requested.connect(self._discover_displays)
+        monitor_form.addWidget(self.monitor_layout)
+        layout.addWidget(monitors)
+        target = QLabel("Фактический FPS зависит от захвата, кодера, сети и частоты обновления экрана.")
         target.setWordWrap(True)
         target.setObjectName("muted")
         layout.addWidget(target)
@@ -809,15 +834,84 @@ class MainWindow(QMainWindow):
         self.control_enabled.toggled.connect(self._control_toggled)
         layout.addWidget(self.control_enabled)
         self._viewer_fields = (self.peer_host, self.peer_port, self.peer_pin, self.peer_fingerprint,
-            self.display_first_index, self.display_second, self.display_second_index, self.video_width,
+            self.monitor_layout, self.video_width,
             self.video_height, self.frame_rate, self.bitrate, self.latency, self.encoder,
-            self.profile, self.native_resolution, self.resolution_preset, self.audio_enabled, self.codec)
+            self.profile, self.native_resolution, self.preserve_aspect, self.resolution_preset, self.audio_enabled, self.codec)
         for field in (self.frame_rate, self.bitrate, self.latency):
             field.valueChanged.connect(self._custom_profile)
         self.video_width.valueChanged.connect(self._dimensions_changed)
         self.video_height.valueChanged.connect(self._dimensions_changed)
         self.encoder.currentIndexChanged.connect(self._custom_profile)
+        self.peer_host.textChanged.connect(self._peer_changed)
+        self.peer_port.valueChanged.connect(self._peer_changed)
+        self.peer_fingerprint.textChanged.connect(self._peer_changed)
         return widget
+
+    def _peer_signature(self):
+        return (self.peer_host.text().strip(), self.peer_port.value(),
+                re.sub(r"[:\s]", "", self.peer_fingerprint.text()).lower(), self.peer_pin.text())
+
+    def _peer_changed(self, *args):
+        self._known_peer = None
+        self.monitor_layout.inventory = []
+        self.monitor_layout._refresh()
+
+    def _discover_displays(self):
+        if self._scanning_displays or self._viewer is not None or self._closing:
+            return
+        host, port, fingerprint, pin = self._peer_signature()
+        if not host or any(c.isspace() for c in host) or not pin:
+            self._status("Для получения экранов введите адрес хоста и PIN.")
+            return
+        if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+            self._status("Вставьте и сверьте полный SHA-256 отпечаток хоста.")
+            return
+        from .app import ViewerController
+        self._scanning_displays = True
+        self.monitor_layout.discover.setEnabled(False)
+        self.connect_button.setEnabled(False)
+        result = {"peer": self._peer_signature()}
+        self._status("Получаем список экранов по защищённому соединению…")
+        def discover():
+            result["displays"] = ViewerController.discover_displays(self.state_dir, host, port, pin, fingerprint)
+        self._task("display-discovery", self._viewer_epoch, result, discover)
+
+    def _show_host_displays(self, values):
+        inventory = display_inventory(values)
+        entries = [Placement(d.index, d.x, d.y, d.width, d.height) for d in inventory]
+        self.host_map.set_entries(entries)
+        self.display_label.setText(f"Экранов в ОС: {len(entries)}. Номера на схеме используются в VirtualKVM.")
+
+    def _refresh_host_displays(self):
+        if self._host is not None or self._closing:
+            return
+        synthetic = self.synthetic.isChecked()
+        result = []
+        self.host_display_refresh.setEnabled(False)
+        def detect():
+            if synthetic:
+                result.extend(dict(index=i, name=f"Тестовый экран {i + 1}", x=i * 1920,
+                                   y=0, width=1920, height=1080) for i in range(2))
+            else:
+                from dataclasses import asdict
+                from .native import list_displays
+                result.extend(asdict(display) for display in list_displays())
+        self._task("local-display-inventory", 0, result, detect)
+
+    def _window_placement(self, index):
+        screens = local_screens()
+        primary = QApplication.primaryScreen()
+        area = primary.availableGeometry() if primary else None
+        fallback = (area.x(), area.y(), area.width(), area.height()) if area else (0, 0, 1280, 720)
+        entry = next((e for e in self.monitor_layout.entries if e.source == index), Placement(index))
+        if self.monitor_layout.presentation == "monitors":
+            target = next((screen for key, _, screen in screens if key == entry.target), primary)
+            if target:
+                rectangle = target.geometry() if self.monitor_layout.fullscreen else target.availableGeometry()
+                return ((rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height()),
+                        target, self.monitor_layout.fullscreen)
+        rectangles = fit_windows(self.monitor_layout.entries, fallback)
+        return rectangles.get(index, fit_windows([entry], fallback)[index]), primary, False
 
     def _apply_profile(self, index: int) -> None:
         values = ((1920, 1080, 240, 45, 30), (1920, 1080, 60, 16, 60),
@@ -867,6 +961,7 @@ class MainWindow(QMainWindow):
 
     def _resolution_mode(self, native: bool) -> None:
         enabled = not native and self._viewer is None
+        self.preserve_aspect.setEnabled(enabled)
         for field in (self.video_width, self.video_height, self.resolution_preset):
             field.setEnabled(enabled)
 
@@ -936,7 +1031,6 @@ class MainWindow(QMainWindow):
             "peer_host": self.peer_host, "peer_port": self.peer_port,
             "width": self.video_width, "height": self.video_height,
             "fps": self.frame_rate, "bitrate": self.bitrate, "latency": self.latency,
-            "first_display": self.display_first_index, "second_display": self.display_second_index,
             "shared_path": self.shared_path}
 
     def _save_preferences(self) -> None:
@@ -945,8 +1039,9 @@ class MainWindow(QMainWindow):
         data.update(profile=self.profile.currentIndex(), encoder=self.encoder.currentText(),
                     codec=self.codec.currentData(),
                     native_resolution=self.native_resolution.isChecked(),
+                    preserve_aspect=self.preserve_aspect.isChecked(),
                     audio=self.audio_enabled.isChecked(), audio_device=self._audio_device_value(),
-                    second_display_enabled=self.display_second.isChecked())
+                    monitor_layout=self.monitor_layout.encode())
         # Deliberately exclude PINs, certificate fingerprints and sharing/write
         # consent. A stored address must never silently authorize another peer.
         temporary = None
@@ -978,8 +1073,21 @@ class MainWindow(QMainWindow):
                 field.setValue(value)
             elif isinstance(field, QLineEdit) and isinstance(value, str):
                 field.setText(value[:4096])
+        try:
+            if "monitor_layout" in data:
+                self.monitor_layout.restore(data["monitor_layout"])
+            else:
+                # Migrate the original one/two-screen preference format.
+                first = data.get("first_display", 0)
+                second = data.get("second_display", 1)
+                entries = [Placement(first)]
+                if data.get("second_display_enabled") is True:
+                    entries.append(Placement(second, x=2000))
+                self.monitor_layout.set_entries(entries)
+        except (TypeError, ValueError):
+            pass
         for name, field in (("native_resolution", self.native_resolution), ("audio", self.audio_enabled),
-                            ("second_display_enabled", self.display_second)):
+                            ("preserve_aspect", self.preserve_aspect)):
             if type(data.get(name)) is bool:
                 field.setChecked(data[name])
         self.codec.setCurrentIndex(max(0, self.codec.findData(data.get("codec", "h264"))))
@@ -1060,7 +1168,7 @@ class MainWindow(QMainWindow):
     def _host_fields(self, enabled: bool) -> None:
         for field in (self.host_bind, self.host_port, self.host_pin, self.new_pin, self.synthetic,
                       self.host_audio_device, self.audio_refresh, self.share_enabled, self.shared_choose,
-                      self.shared_writable):
+                      self.shared_writable, self.host_display_refresh):
             field.setEnabled(enabled)
 
     def _stop_host(self) -> None:
@@ -1071,7 +1179,7 @@ class MainWindow(QMainWindow):
         self._task("host-stop", self._host_epoch, self._host, self._host.stop)
 
     def _connect_viewer(self) -> None:
-        if self._viewer is not None or self._closing:
+        if self._viewer is not None or self._closing or self._scanning_displays:
             return
         fingerprint = re.sub(r"[:\s]", "", self.peer_fingerprint.text()).lower()
         if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
@@ -1081,16 +1189,17 @@ class MainWindow(QMainWindow):
         if not host or any(character.isspace() for character in host) or not self.peer_pin.text():
             self._status("Введите адрес второго компьютера и его PIN.")
             return
-        displays = [self.display_first_index.value()]
-        if self.display_second.isChecked():
-            displays.append(self.display_second_index.value())
-        if len(set(displays)) != len(displays):
-            self._status("Для двух окон выберите разные номера экранов хоста.")
+        try:
+            self.monitor_layout.validate()
+        except ValueError as error:
+            self._status(str(error))
             return
+        displays = [entry.source for entry in self.monitor_layout.entries]
         config = {"width": self.video_width.value(), "height": self.video_height.value(),
                   "fps": self.frame_rate.value(), "bitrate_mbps": self.bitrate.value(),
                   "codec": self.codec.currentData(), "encoder": self.encoder.currentText(),
                   "latency_ms": self.latency.value(), "source_resolution": self.native_resolution.isChecked(),
+                  "preserve_aspect": self.preserve_aspect.isChecked(),
                   "audio": self.audio_enabled.isChecked()}
         if config["width"] * config["height"] > 67108864 and not config["source_resolution"]:
             self._status("Выберите разрешение до 64 мегапикселей на экран.")
@@ -1152,10 +1261,7 @@ class MainWindow(QMainWindow):
                 self._host_running = True
                 self.host_stop.setEnabled(True)
                 self.host_fingerprint.setText(str(owner.fingerprint))
-                self.display_label.setText("Доступные экраны: " + "; ".join(
-                    f"{display.get('index', '?')}: {display.get('name', 'Display')} "
-                    f"({display.get('width', '?')}×{display.get('height', '?')})"
-                    for display in owner.displays))
+                self._show_host_displays(owner.displays)
                 self.connection_badge.setText("●  Хост доступен")
                 self._status("Хост запущен. Передайте адрес, PIN и отпечаток на второй компьютер.")
             else:
@@ -1174,6 +1280,16 @@ class MainWindow(QMainWindow):
                     self._task("viewer-stale", -1, owner, owner.disconnect)
                 return
             if kind == "viewer-connect" and error is None:
+                try:
+                    self.monitor_layout.set_inventory(owner.displays)
+                except ValueError as failure:
+                    self._status(f"Некорректный список экранов: {failure}")
+                    self._disconnect_viewer()
+                    return
+                # A media callback may open a window before negotiation finishes.
+                # Apply final source dimensions even when discovery was skipped.
+                for index, window in self.video_windows.items():
+                    self._place_video_window(index, window)
                 self._connecting = False
                 self._pump = _InputPump(owner.send_event,
                     lambda text: _emit(self._bridge.input_failed, text))
@@ -1197,6 +1313,30 @@ class MainWindow(QMainWindow):
                 self.control_enabled.setEnabled(False)
                 self.connection_badge.setText("●  Хост доступен" if self._host_running else "●  Готов к подключению")
                 self._status(f"Не удалось подключиться: {error}" if error else "Отключено. Клавиатура и мышь освобождены.")
+        elif kind == "display-discovery":
+            self._scanning_displays = False
+            self.monitor_layout.discover.setEnabled(self._viewer is None)
+            self.connect_button.setEnabled(self._viewer is None)
+            if owner["peer"] != self._peer_signature():
+                self._status("Данные подключения изменились. Получите список экранов заново.")
+            elif error:
+                self._status(f"Не удалось получить экраны: {error}")
+            else:
+                try:
+                    self.monitor_layout.set_inventory(owner["displays"])
+                    self._known_peer = owner["peer"][:3]
+                    self._status(f"Доступно экранов: {len(self.monitor_layout.inventory)}. Выберите количество и расположение в настройке экранов.")
+                except ValueError as failure:
+                    self._status(str(failure))
+        elif kind == "local-display-inventory":
+            self.host_display_refresh.setEnabled(self._host is None)
+            if error:
+                self._status(f"Не удалось получить экраны этого компьютера: {error}")
+            elif self._host is None:
+                try:
+                    self._show_host_displays(owner)
+                except ValueError as failure:
+                    self._status(str(failure))
         elif kind == "file" and epoch == self._viewer_epoch:
             self.send_file_button.setEnabled(self._viewer is not None and not self._disconnecting)
             self._status(f"Не удалось передать файл: {error}" if error else f"Файл передан: {owner.name}")
@@ -1217,14 +1357,14 @@ class MainWindow(QMainWindow):
                 self._clipboard_timer.start()
 
     def _receive_frame(self, epoch: int, index: int, rgb: bytes, width: int, height: int) -> None:
-        if (self._closing or epoch != self._viewer_epoch or not isinstance(index, int)
+        if (self._closing or epoch != self._viewer_epoch or type(index) is not int
                 or index < 0 or index > 63 or width <= 0 or height <= 0
                 or width > 16384 or height > 16384 or width * height > 67108864
-                or len(rgb) != width * height * 3):
+                or len(rgb) != width * height * 3 or index not in self._requested_displays):
             return
         with self._frames_lock:
             # At most one pending frame per selected source, never a Qt event per frame.
-            if index in self._frames or len(self._frames) < 2:
+            if index in self._frames or len(self._frames) < MAX_STREAMS:
                 self._frames[index] = (rgb, width, height)
 
     def _poll_frames(self) -> None:
@@ -1253,10 +1393,19 @@ class MainWindow(QMainWindow):
             window.closed.connect(self._video_closed)
             window.media_error.connect(self._media_failed)
             self.video_windows[index] = window
-            window.move(self.x() + 40 + len(self.video_windows) * 35,
-                        self.y() + 40 + len(self.video_windows) * 35)
-            window.show()
+            self._place_video_window(index, window)
         return window
+
+    def _place_video_window(self, index, window):
+        rectangle, screen, fullscreen = self._window_placement(index)
+        if screen is not None:
+            window.winId()
+            window.windowHandle().setScreen(screen)
+        window.setGeometry(*rectangle)
+        if fullscreen:
+            window.showFullScreen()
+        else:
+            window.show()
 
     def _media_failed(self, message: str) -> None:
         self._status(message)

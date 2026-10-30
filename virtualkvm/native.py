@@ -235,6 +235,12 @@ def list_displays() -> list[Display]:
                 if mode:
                     pixel_width = int(q.CGDisplayModeGetPixelWidth(mode))
                     pixel_height = int(q.CGDisplayModeGetPixelHeight(mode))
+            # A rotated display mode may report the panel's unrotated pixels.
+            # Match desktop orientation without swapping already-oriented modes.
+            logical_width, logical_height = int(bounds.size.width), int(bounds.size.height)
+            if (logical_width != logical_height and pixel_width != pixel_height
+                    and (logical_width > logical_height) != (pixel_width > pixel_height)):
+                pixel_width, pixel_height = pixel_height, pixel_width
             # CGEvent coordinates use logical desktop points on Retina displays.
             result.append(Display(index, f"Display {identifier}", int(bounds.origin.x),
                                   int(bounds.origin.y), int(bounds.size.width), int(bounds.size.height),

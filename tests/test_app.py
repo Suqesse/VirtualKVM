@@ -38,6 +38,26 @@ class ApplicationIntegration(unittest.TestCase):
         self.assertEqual(set(result["decoded_frames"]), {0, 1})
         self.assertTrue(all(count >= 8 for count in result["decoded_frames"].values()))
 
+    def test_eight_stream_negotiation_preserves_portrait_aspect_and_one_audio_track(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = HostController(Path(directory), synthetic=True)
+            host.displays[:] = [dict(index=i, name=f"Display {i}", x=-1080 if i == 3 else i * 1920,
+                                     y=0, width=1080 if i == 3 else 1920,
+                                     height=1920 if i == 3 else 1080) for i in range(8)]
+            config = asdict(StreamConfig(width=160, height=90, audio=True))
+            config.update(preserve_aspect=True, receiver_ports={str(i): 41000 + i for i in range(8)})
+            response = host._prepare_streams({"displays": list(range(8)), "config": config, "_peer_host": "127.0.0.1"})
+            self.assertEqual(len(response["streams"]), 8)
+            self.assertEqual(sum(s["config"]["audio"] for s in response["streams"]), 1)
+            portrait = response["streams"][3]["config"]
+            self.assertEqual((portrait["width"], portrait["height"]), (51, 90))
+            self.assertEqual(host._pending[3][3].x, -1080)
+            with self.assertRaises(ValueError):
+                host._prepare_streams({"displays": list(range(9)), "config": config, "_peer_host": "127.0.0.1"})
+            with self.assertRaises(ValueError):
+                host._prepare_streams({"displays": [0], "config": {**config, "preserve_aspect": "yes"}, "_peer_host": "127.0.0.1"})
+            host._stop_streams()
+
     def test_release_survives_media_cleanup_error(self):
         with tempfile.TemporaryDirectory() as directory:
             host = HostController(Path(directory), synthetic=True)

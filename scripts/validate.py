@@ -27,6 +27,7 @@ def main(argv=None):
         environment["QT_AUDIO_BACKEND"] = "pulseaudio"
     commands = [
         ("doctor", [sys.executable, "-m", "virtualkvm", "doctor"], 30),
+        ("interface", [sys.executable, "-m", "virtualkvm", "ui-check"], 30),
         ("tests", [sys.executable, str(root / "scripts/run_tests.py")], 300),
         ("audio-video-smoke", [sys.executable, "-m", "virtualkvm", "smoke", "--fps", "240", "--audio"], 90),
     ]
@@ -34,6 +35,7 @@ def main(argv=None):
         binary = str(args.packaged.resolve(strict=True))
         commands += [
             ("packaged-doctor", [binary, "doctor"], 30),
+            ("packaged-interface", [binary, "ui-check"], 30),
             ("packaged-audio-video", [binary, "smoke", "--fps", "240", "--audio"], 90),
         ]
     report = dict(

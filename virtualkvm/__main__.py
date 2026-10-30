@@ -128,11 +128,43 @@ def smoke(fps=240, dual=True, audio=False):
                 event_loop.exec()
 
 
+def ui_check():
+    """Render the installed interface and resources without starting sharing."""
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QApplication, QLineEdit, QSpinBox
+    from .gui import MainWindow
+    application = QApplication.instance() or QApplication([])
+    application.setQuitOnLastWindowClosed(True)
+    icon = Path(__file__).parent / "assets/check.svg"
+    if QImage(str(icon)).isNull():
+        raise RuntimeError("The installed interface resource is missing or unreadable")
+    with tempfile.TemporaryDirectory(prefix="virtualkvm-ui-check-") as temporary:
+        window = MainWindow(Path(temporary))
+        window.show()
+        application.processEvents()
+        for field in window.findChildren(QSpinBox):
+            if field.isVisible():
+                editor = field.findChild(QLineEdit)
+                if editor is None or editor.width() < editor.fontMetrics().horizontalAdvance(field.text()) + 16:
+                    raise RuntimeError("The installed numeric controls cannot display their values")
+        QTimer.singleShot(200, window.close)
+        QTimer.singleShot(10000, application.quit)
+        application.exec()
+        if not window._shutdown_complete:
+            raise RuntimeError("The installed interface did not shut down cleanly")
+    return {"interface": True, "resources": True, "clean_shutdown": True}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="virtualkvm", description="Encrypted LAN desktop video and input sharing")
-    parser.add_argument("--version", action="version", version="VirtualKVM 0.1.0")
+    from . import __version__
+    parser.add_argument("--version", action="version", version=f"VirtualKVM {__version__}")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("doctor", help="Check FFmpeg/SRT, native input and capture permissions")
+    commands.add_parser("ui-check", help="Render and close the interface using temporary settings")
     check = commands.add_parser("smoke", help="Run real encrypted synthetic end-to-end check")
     check.add_argument("--fps", type=int, default=240)
     check.add_argument("--single", action="store_true")
@@ -148,6 +180,9 @@ def main(argv=None):
     server.add_argument("--share-write", action="store_true", help="Allow uploads and directory creation in the chosen shared folder")
     args = parser.parse_args(argv)
     try:
+        if args.command == "ui-check":
+            print(json.dumps(ui_check(), indent=2))
+            return 0
         if args.command == "doctor":
             from .media import FFmpegLocator
             from .native import NativeInput, list_displays

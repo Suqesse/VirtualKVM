@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "virtualkvm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Encrypted desktop video and input sharing between Windows and macOS"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,3 +25,6 @@ virtualkvm = "virtualkvm.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["virtualkvm*"]
+
+[tool.setuptools.package-data]
+virtualkvm = ["assets/*.svg"]
