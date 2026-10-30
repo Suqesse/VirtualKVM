@@ -111,6 +111,12 @@ def smoke(fps=240, dual=True, audio=False):
                 shared_folder="list, download, mkdir, upload verified",
                 audio="Qt shared-clock playback (muted check)" if audio else "disabled",
                 note="Synthetic integration check; native capture/display FPS and latency require hardware measurement")
+        except Exception as error:
+            media_errors = [sender.last_error for sender in host.senders] + [receiver.last_error for receiver in viewer.receivers]
+            raise RuntimeError(
+                f"End-to-end check failed: {type(error).__name__}: {error}; "
+                f"media={media_errors}; status={statuses[-8:]}"
+            ) from error
         finally:
             viewer.disconnect()
             host.stop()

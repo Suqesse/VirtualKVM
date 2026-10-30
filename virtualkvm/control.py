@@ -592,8 +592,9 @@ class ViewerClient:
                     if not isinstance(text, str) or len(text.encode("utf-8")) > 4096:
                         raise ProtocolError("Invalid host status message")
                     _notify(self.on_status, text)
-        except (OSError, EOFError, ProtocolError):
-            pass
+        except (OSError, EOFError, ProtocolError) as error:
+            if not self._heartbeat_stop.is_set():
+                _notify(self.on_status, f"Control connection failed: {type(error).__name__}: {error}")
         finally:
             self._heartbeat_stop.set()
             with self._lock:

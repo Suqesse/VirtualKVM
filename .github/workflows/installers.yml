@@ -98,6 +98,9 @@ jobs:
           python -m pip install -r requirements.lock
           python -m pip install --no-deps -e .
           python -m pip install pyinstaller
+      - name: Stress Windows dual-stream startup
+        if: runner.os == 'Windows'
+        run: python scripts/ci_run.py --log build/native-startup-stress.log -- python -c "import subprocess,sys; [subprocess.run([sys.executable,'-m','virtualkvm','smoke','--fps','240'],check=True,timeout=90) for _ in range(5)]"
       - name: Validate application
         run: python scripts/ci_run.py --log build/native-validation.log -- python scripts/validate.py
       - name: Build self-contained application
