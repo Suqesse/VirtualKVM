@@ -75,7 +75,7 @@ def _expand_loader(value, source, executable):
         return source.parent / value[len("@loader_path/"):]
     if value.startswith("@executable_path/"):
         return executable.parent / value[len("@executable_path/"):]
-    if value.startswith("/"):
+    if Path(value).is_absolute():
         return Path(value)
     raise BundleError(f"Unsupported Mach-O load path {value!r} in {source.name}")
 

@@ -1,28 +1,28 @@
 {
-  "created_utc": "2026-10-30T09:55:27.217040+00:00",
+  "created_utc": "2026-10-30T10:27:45.659133+00:00",
   "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
   "python": "3.12.14",
   "checks": [
     {
       "name": "doctor",
       "exit_code": 0,
-      "seconds": 0.16,
+      "seconds": 0.21,
       "log": "build/validation/doctor.log",
       "passed": true
     },
     {
       "name": "tests",
       "exit_code": 0,
-      "seconds": 36.96,
+      "seconds": 38.44,
       "log": "build/validation/tests.log",
       "passed": true,
-      "executed_tests": 131,
+      "executed_tests": 132,
       "skipped_tests": 0
     },
     {
       "name": "audio-video-smoke",
       "exit_code": 0,
-      "seconds": 4.58,
+      "seconds": 4.63,
       "log": "build/validation/audio-video-smoke.log",
       "passed": true
     }
@@ -30,14 +30,14 @@
   "scope": "Synthetic encrypted integration, UI, input dry-run, shared files and muted Qt audio/video playback. Native hardware capture, sound output and display throughput are not measured.",
   "sources": {
     "virtualkvm/__init__.py": "ffcc0b1b290d901af48d4d2c9cfad10602b50705cab7d5480a9158bd63d089e8",
-    "virtualkvm/__main__.py": "db4c128a20cd85d514ac4fed79a9df4629a61a46820296654d0f2fef1e30a774",
+    "virtualkvm/__main__.py": "e3e415bd08f269a1277ebfb517d01058564b1972f1a0a2e3713c86a634b26ad3",
     "virtualkvm/app.py": "96c70fcd3c674bcae906f844dc2cbe32e6c100f5e22fb6f04c5ccd467f6e5cf8",
     "virtualkvm/control.py": "b6b580fda93d804797e064d34a5a81ecb6c80dce412b97ba78805f025870fe1f",
-    "virtualkvm/gui.py": "38027fbe95d26463f2005e7f36768f49d488da5f7603494e7a041909361bed2f",
+    "virtualkvm/gui.py": "6fa61d8dae6b82c826451137cba5d33fbf4402a07904743c2964b81856b1c856",
     "virtualkvm/media.py": "a64d5cf6d8f63971d2d12b02ae7134822fdf2b6e1db047e049c43d673e0698bb",
     "virtualkvm/native.py": "69a7d95b879a8c1d5767883f12492e1f03bea844b77577ab3e769e3c9c6aa9ff",
     "virtualkvm/security.py": "6ac3dd0a9253e6f47709ad5b1251f344bd3ec5f038be19e315992e5962048efc",
-    "virtualkvm/shared.py": "7888cf9e86e59cff7b08974b61bd59ffdee2fa970edc44a9e57b907e9b5b8b1d",
+    "virtualkvm/shared.py": "cb203bdb2e14ebfff7b5e62ee0f8e9ff16af70a3a024315d45bf4405294c9a4e",
     "virtualkvm/shared_gui.py": "f9bc4abfa1241096c1dc456e02503a362ad6be7232d999e86fa1b46711d7825c"
   },
   "passed": true

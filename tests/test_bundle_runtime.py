@@ -16,7 +16,7 @@ from virtualkvm.media import FFmpegLocator, MediaError
 class LocatorBundleTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.extension = ".exe" if os.name == "nt" else ""
         environment = patch.dict(os.environ, {}, clear=False)
         environment.start()
@@ -76,7 +76,7 @@ class LocatorBundleTests(unittest.TestCase):
 class MacRelocationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.runtime = self.root / "runtime"
         self.runtime.mkdir()
         self.ffmpeg = self.file("brew/bin/ffmpeg")

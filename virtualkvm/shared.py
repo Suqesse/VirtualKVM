@@ -153,9 +153,13 @@ class SharedDirectory:
     def read(self, path):
         self._require()
         parts = _parts(path, root_allowed=False)
-        with _Directory(self.root, parts[:-1]) as directory:
+        directory = _Directory(self.root, parts[:-1])
+        try:
             descriptor = directory.open_file(parts[-1])
-        return SharedRead(descriptor, "/".join(parts))
+            return SharedRead(descriptor, "/".join(parts), directory, parts[-1])
+        except BaseException:
+            directory.close()
+            raise
 
     def upload(self, path, size):
         self._require(write=True)
@@ -176,21 +180,48 @@ class SharedDirectory:
 
 
 class SharedRead:
-    def __init__(self, descriptor: int, relative_path: str):
-        self.stream = os.fdopen(descriptor, "rb")
-        self.status = os.fstat(descriptor)
-        self.size = self.status.st_size
+    def __init__(self, descriptor: int, relative_path: str, directory: _Directory, name: str):
+        # Avoid read-ahead retaining old bytes after another process rewrites
+        # this file. NTFS may also retain stale fstat timestamps on this handle.
+        self.stream = os.fdopen(descriptor, "rb", buffering=0)
+        self.directory, self.name = directory, name
+        self._closed = False
         self.path = relative_path
         self.offset = 0
         self.digest = hashlib.sha256()
-        if self.size > MAX_FILE_SIZE:
+        try:
+            # Query the path through the retained, validated parent instead of
+            # trusting CRT/NTFS metadata cached on an already-open file handle.
+            self.status = directory.status(name)
+            self.size = self.status.st_size
+            handle = os.fstat(descriptor)
+            if (handle.st_dev, handle.st_ino) != (self.status.st_dev, self.status.st_ino):
+                raise SharedError("Shared file changed during download")
+            if self.size > MAX_FILE_SIZE:
+                raise SharedError("Shared files are limited to 1 GiB")
+            self._check_metadata()
+        except BaseException:
             self.close()
-            raise SharedError("Shared files are limited to 1 GiB")
+            raise
+
+    def _check_metadata(self):
+        try:
+            current = self.directory.status(self.name)
+        except OSError as error:
+            raise SharedError("Shared file changed during download") from error
+        def version(status):
+            return (status.st_size, status.st_mtime_ns, status.st_ctime_ns,
+                    status.st_ino, status.st_dev)
+        if (_linked(current) or not stat.S_ISREG(current.st_mode) or current.st_nlink > 1
+                or version(current) != version(self.status)):
+            raise SharedError("Shared file changed during download")
 
     def read(self, offset, length):
         if type(offset) is not int or offset != self.offset or type(length) is not int or not 1 <= length <= CHUNK_SIZE:
             raise SharedError("Invalid shared-file read range")
+        self._check_metadata()
         block = self.stream.read(min(length, self.size - self.offset))
+        self._check_metadata()
         self.offset += len(block)
         self.digest.update(block)
         if not block and self.offset != self.size:
@@ -198,14 +229,18 @@ class SharedRead:
         done = self.offset == self.size
         checksum = None
         if done:
-            current = os.fstat(self.stream.fileno())
-            if (current.st_size, current.st_mtime_ns, current.st_ino, current.st_dev) != (self.status.st_size, self.status.st_mtime_ns, self.status.st_ino, self.status.st_dev):
-                raise SharedError("Shared file changed during download")
+            self._check_metadata()
             checksum = self.digest.hexdigest()
         return block, {"offset": offset, "size": self.size, "eof": done, "sha256": checksum}
 
     def close(self):
-        self.stream.close()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.stream.close()
+        finally:
+            self.directory.close()
 
 
 class SharedUpload:

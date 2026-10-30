@@ -10,7 +10,6 @@ import socket
 import tempfile
 import threading
 import time
-from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -18,7 +17,7 @@ from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QFocusEvent, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication
 
-from virtualkvm.gui import MainWindow, VideoCanvas, normalized_key
+from virtualkvm.gui import MainWindow, VideoCanvas, VideoWindow, normalized_key
 from common_qt import wait_ms
 
 
@@ -236,10 +235,14 @@ class GuiControllerIntegration(unittest.TestCase):
                         self.connected = False
                         network_stopped.set()
 
-                canvas = SimpleNamespace(set_input_enabled=lambda enabled: None, release_pressed=lambda: None)
-                video = SimpleNamespace(canvas=canvas, _audio_output=None,
-                    setEnabled=lambda enabled: None,
-                    force_close=lambda: qt_closes.append(network_stopped.is_set()))
+                class Player:
+                    def stop(self):
+                        raise AssertionError("Finalization must unload the source, not retain stopped HTTP media")
+                    def setSource(self, source):
+                        qt_closes.append((network_stopped.is_set(), source.isEmpty()))
+
+                video = VideoWindow(0, lambda event: None, lambda: None, lambda enabled: None, False)
+                video._player = Player()
                 window._viewer = Viewer()
                 window.video_windows[0] = video
                 window.show()
@@ -255,7 +258,7 @@ class GuiControllerIntegration(unittest.TestCase):
                         self.wait_for(lambda: window._viewer is None)
                     else:
                         self.wait_for(lambda: window._shutdown_complete)
-                    self.assertEqual(qt_closes, [True])
+                    self.assertEqual(qt_closes, [(True, True)])
                 finally:
                     allow_finish.set()
                     window.close()
@@ -264,6 +267,12 @@ class GuiControllerIntegration(unittest.TestCase):
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for AV integration")
     def test_av_shared_clock_odd_resolution_and_hiding_primary_keeps_secondary(self):
         from virtualkvm.app import HostController
+        def phase(name):
+            # Native CI retains these markers even when a Qt backend emits a
+            # large error storm; no peer identity or credentials are included.
+            print(f"GUI_AV_PHASE: {name}", flush=True)
+
+        phase("begin")
         with tempfile.TemporaryDirectory(prefix="virtualkvm-gui-av-") as temporary:
             root = Path(temporary)
             def host_factory(*args, **kwargs):
@@ -282,6 +291,7 @@ class GuiControllerIntegration(unittest.TestCase):
                 with mock.patch("virtualkvm.app.HostController", side_effect=host_factory):
                     window._start_host()
                 self.wait_for(lambda: window._host_running)
+                phase("host-ready")
                 window.peer_host.setText("127.0.0.1")
                 window.peer_port.setValue(port)
                 window.peer_pin.setText(window.host_pin.text())
@@ -293,28 +303,39 @@ class GuiControllerIntegration(unittest.TestCase):
                 window.display_second.setChecked(True)
                 window.audio_enabled.setChecked(True)
                 window._connect_viewer()
+                phase("connecting")
                 self.wait_for(lambda: len(window.video_windows) == 2, timeout=30)
+                phase("two-video-windows-ready")
                 self.wait_for(lambda: window.video_windows.get(0) is not None
                     and window.video_windows[0].av_frames >= 4, timeout=30)
                 primary = window.video_windows[0]
+                phase("primary-frames-decoded")
                 self.assertTrue(primary._player.hasAudio())
                 self.assertTrue(primary._player.hasVideo())
                 self.assertEqual(primary.canvas._media_size, (320, 182))
                 primary.mute_action.setChecked(True)
                 self.assertTrue(primary._audio_output.isMuted())
+                phase("primary-muted")
                 primary.close()
+                phase("primary-hidden")
                 wait_ms(600)
                 self.assertIn(0, window._hidden_video_windows)
                 self.assertIn(1, window.video_windows)
                 self.assertTrue(window._viewer.connected)
+                phase("secondary-survived-primary-hide")
                 window.video_windows[1].close()
+                phase("secondary-closed-awaiting-disconnect")
                 self.wait_for(lambda: window._viewer is None)
+                phase("viewer-disconnected")
                 self.assertFalse(window._hidden_video_windows)
             finally:
+                phase("main-window-closing")
                 window.close()
                 self.wait_for(lambda: window._shutdown_complete, timeout=25)
+                phase("shutdown-complete")
                 window.deleteLater()
                 self.app.processEvents()
+        phase("test-complete")
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for real video integration")
     def test_real_pairing_two_video_windows_input_and_clean_shutdown(self):

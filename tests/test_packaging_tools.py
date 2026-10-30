@@ -47,7 +47,7 @@ class PackagingToolsTests(unittest.TestCase):
 
     def test_chocolatey_launcher_is_resolved_to_real_media_executable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)/'Chocolatey'
+            root=Path(temporary).resolve()/'Chocolatey'
             shim=root/'bin/ffmpeg.exe'; shim.parent.mkdir(parents=True);shim.write_bytes(b'shim')
             binary=root/'lib/ffmpeg-full/tools/native/bin/ffmpeg.exe'
             binary.parent.mkdir(parents=True);binary.write_bytes(b'MZpayload')

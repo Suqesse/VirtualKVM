@@ -39,18 +39,25 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          import hashlib,json
+          import hashlib,json,subprocess
           root=Path('artifacts')
           folders=list(root.glob('VirtualKVM-installer-*'))
           if len(folders)!=3: raise SystemExit('Expected all three native targets')
+          checksums=[]
+          reports={}
           for folder in folders:
               report=json.loads((folder/'installation-check.json').read_text())
               if not report or not all(v is True for v in report.values()): raise SystemExit('Native installation validation did not pass')
+              reports[folder.name]=report
               for line in (folder/'SHA256SUMS').read_text().splitlines():
                   digest,name=line.split('  ',1)
                   target=folder/name
                   if target.parent!=folder or hashlib.sha256(target.read_bytes()).hexdigest()!=digest: raise SystemExit('Installer checksum mismatch')
+                  checksums.append(digest+'  '+name)
+          (root/'SHA256SUMS').write_text('\n'.join(checksums)+'\n')
+          (root/'installation-checks.json').write_text(json.dumps({'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'targets':reports},indent=2)+'\n')
           PY
           mapfile -t FILES < <(find artifacts -type f \( -name '*.exe' -o -name '*.pkg' -o -name '*.dmg' \) | sort)
           test "${#FILES[@]}" -eq 5
+          FILES+=("artifacts/SHA256SUMS" "artifacts/installation-checks.json")
           gh release create "$GITHUB_REF_NAME" "${FILES[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "VirtualKVM $GITHUB_REF_NAME — desktop installers" --notes-file packaging/RELEASE_NOTES.md

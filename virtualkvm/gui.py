@@ -402,7 +402,10 @@ class VideoWindow(QMainWindow):
         if source.scheme() != "http" or source.host() not in ("127.0.0.1", "localhost"):
             raise ValueError("AV-плеер принимает только внутренний локальный видеопоток")
         if self._player:
-            self._player.stop()
+            # Empty source means stop AND unload. stop() alone retains a live
+            # HTTP media engine, which can retry reads after relay shutdown.
+            # PySide explicitly releases the GIL for setSource as well.
+            self._player.setSource(QUrl())
             self._player.deleteLater()
             self._audio_output.deleteLater()
             self._video_widget.deleteLater()
@@ -456,7 +459,7 @@ class VideoWindow(QMainWindow):
             return
         self._closing_media = True
         if self._player:
-            self._player.stop()
+            self._player.setSource(QUrl())
         self.canvas.release_pressed()
         self.closed.emit(self.display)
         super().closeEvent(event)

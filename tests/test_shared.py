@@ -165,6 +165,29 @@ class SharedTests(unittest.TestCase):
         self.assertFalse((self.share / "bad").exists())
         self.assertFalse(list(self.share.glob("*.part")))
 
+    def test_source_mutation_rejected_even_when_windows_handle_metadata_is_cached(self):
+        from unittest.mock import patch
+        client = self.connect()
+        source = self.share / "cached-stat"
+        original = b"a" * (128 * 1024)
+        # Exercise unread data and an already-delivered region. In the second
+        # case the transferred bytes would still match the original; fresh
+        # nofollow path metadata must detect the edit despite cached fstat.
+        for replacement in (b"b" * len(original), b"b" * (64 * 1024) + original[64 * 1024:]):
+            with self.subTest(already_sent_only=replacement[64 * 1024:] == original[64 * 1024:]):
+                source.write_bytes(original)
+                cached = source.stat()
+                with patch("virtualkvm.shared.os.fstat", return_value=cached):
+                    client._request("shared_read_begin", path="cached-stat")
+                    first = client._request("shared_read", offset=0, length=64 * 1024)
+                    self.assertEqual(base64.b64decode(first["data"]), original[:64 * 1024])
+                    source.write_bytes(replacement)
+                    with self.assertRaisesRegex(ProtocolError, "changed"):
+                        client._request("shared_read", offset=64 * 1024, length=64 * 1024)
+        # Both failures must close their transfer and leave the session usable.
+        client.shared_download("hello.txt", self.root / "after-mutation.txt")
+        self.assertEqual((self.root / "after-mutation.txt").read_bytes(), (self.share / "hello.txt").read_bytes())
+
     def test_directory_listing_is_bounded(self):
         from unittest.mock import patch
         client = self.connect()

@@ -17,7 +17,7 @@ class MacInstallerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
         self.bundle = self.directory / "VirtualKVM.app"
         contents = self.bundle / "Contents"
         (contents / "MacOS").mkdir(parents=True)
@@ -189,7 +189,7 @@ class MacInstallerTests(unittest.TestCase):
     def test_dmg_icon_is_applied_to_staging_only(self):
         icon = self.directory / "VirtualKVM.icns"
         icon.write_bytes(b"icns fixture")
-        with mock.patch.object(macos.os, "setxattr") as attribute:
+        with mock.patch.object(macos.os, "setxattr", create=True) as attribute:
             artifacts = macos.build_installers(self.bundle, "0.1.0", self.output, icon=icon)
         self.assertEqual(len(artifacts), 2)
         self.assertEqual(attribute.call_args.args[1], "com.apple.FinderInfo")

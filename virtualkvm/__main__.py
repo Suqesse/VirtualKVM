@@ -115,7 +115,6 @@ def smoke(fps=240, dual=True, audio=False):
             viewer.disconnect()
             host.stop()
             for player, output, sink in players:
-                player.stop()
                 player.setSource(QUrl())
             if application:
                 event_loop = QEventLoop()

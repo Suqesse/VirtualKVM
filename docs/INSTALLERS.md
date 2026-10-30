@@ -70,7 +70,7 @@ python scripts/installer.py
 
 ### macOS
 
-CI собирает FFmpeg 9.0.2 из официального исходного архива с проверкой SHA-256 и SRT/x264/x265 из Homebrew. Обычная формула `ffmpeg` может не включать SRT; для разработки из готового Homebrew-пакета используйте `ffmpeg-full`.
+CI собирает FFmpeg 9.0.2 из официального исходного архива с проверкой SHA-256 и SRT/x264/x265. На Apple Silicon зависимости устанавливаются из Homebrew; на Intel они собираются из закреплённых исходников скриптом `scripts/build_media_deps_macos.sh`, без сборки всего дерева зависимостей Homebrew. Обычная формула `ffmpeg` может не включать SRT; для разработки из готового Homebrew-пакета используйте `ffmpeg-full`.
 
 ```bash
 bash scripts/build_ffmpeg_macos.sh
