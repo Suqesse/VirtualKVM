@@ -14,8 +14,10 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 from string import Template
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 
@@ -196,6 +198,31 @@ def _notarize(path: Path, profile: str) -> None:
     _run(["xcrun", "stapler", "validate", str(path)])
 
 
+def _create_disk_image(staging: Path, image: Path) -> None:
+    """Retry a temporarily busy DiskImages service, keeping validation mandatory."""
+    arguments = ["hdiutil", "create", "-volname", "VirtualKVM", "-srcfolder", str(staging),
+                 "-format", "UDZO", str(image)]
+    for attempt in range(4):
+        try:
+            result = _run(arguments, capture=True)
+        except subprocess.CalledProcessError as error:
+            if error.stdout:
+                print(error.stdout, end="", flush=True)
+            if error.stderr:
+                print(error.stderr, end="", file=sys.stderr, flush=True)
+            if "resource busy" not in (error.stderr or "").lower() or attempt == 3:
+                raise
+            # Only this build's unpublished temporary image can be removed.
+            image.unlink(missing_ok=True)
+            delay = 2 ** (attempt + 1)
+            print(f"DiskImages service busy; retrying in {delay}s ({attempt + 2}/4)", flush=True)
+            time.sleep(delay)
+        else:
+            if result.stdout:
+                print(result.stdout, end="", flush=True)
+            return
+
+
 def build_installers(app_bundle: Path, version: str, output_dir: Path, *,
                      icon: Path | None = None) -> list[Path]:
     """Build .pkg/.dmg artifacts without modifying the supplied .app bundle."""
@@ -287,8 +314,7 @@ def build_installers(app_bundle: Path, version: str, output_dir: Path, *,
             finder_info[8:10] = (0x0400).to_bytes(2, "big")  # kHasCustomIcon
             _run(["/usr/bin/xattr", "-wx", "com.apple.FinderInfo", bytes(finder_info).hex(), str(disk_root)])
         image = work / f"{stem}.dmg"
-        _run(["hdiutil", "create", "-volname", "VirtualKVM", "-srcfolder", str(disk_root),
-              "-format", "UDZO", str(image)])
+        _create_disk_image(disk_root, image)
         if application_identity:
             _run(["codesign", "--sign", application_identity, "--timestamp", str(image)])
             _run(["codesign", "--verify", "--strict", "--verbose=2", str(image)])

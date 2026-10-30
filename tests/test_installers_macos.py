@@ -215,6 +215,42 @@ cmd LC_VERSION_MIN_MACOSX
         self.assertEqual(bytes.fromhex(attribute[3])[8:10], b"\x04\x00")
         self.assertFalse((self.bundle / ".VolumeIcon.icns").exists())
 
+    def test_busy_disk_images_service_retries_then_verifies_the_image(self):
+        attempts = []
+        def busy_once(command, *, capture=False):
+            if command[:2] == ["hdiutil", "create"]:
+                attempts.append(command)
+                if len(attempts) == 1:
+                    Path(command[-1]).write_bytes(b"incomplete image")
+                    raise subprocess.CalledProcessError(1, command, stderr="hdiutil: create failed - Resource busy\n")
+                self.assertFalse(Path(command[-1]).exists())
+            return self._native_tool(command, capture=capture)
+        with mock.patch.object(macos, "_run", side_effect=busy_once), mock.patch.object(macos.time, "sleep"):
+            artifacts = macos.build_installers(self.bundle, "0.1.0", self.output)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(all(path.is_file() for path in artifacts))
+        self.assertTrue(any(command[:2] == ["hdiutil", "verify"] for command in self.commands))
+
+    def test_image_creation_failure_is_bounded_and_preserves_published_artifacts(self):
+        for message, expected_attempts in (("Resource busy", 4), ("No space left on device", 1)):
+            with self.subTest(error=message):
+                self.output.mkdir(exist_ok=True)
+                previous = self.output / "VirtualKVM-0.1.0-macos-arm64.dmg"
+                previous.write_bytes(b"previously verified image")
+                attempts = []
+                def fail_create(command, *, capture=False):
+                    if command[:2] == ["hdiutil", "create"]:
+                        attempts.append(command)
+                        Path(command[-1]).write_bytes(b"incomplete image")
+                        raise subprocess.CalledProcessError(1, command, stderr=message)
+                    return self._native_tool(command, capture=capture)
+                with mock.patch.object(macos, "_run", side_effect=fail_create), \
+                     mock.patch.object(macos.time, "sleep"), self.assertRaises(subprocess.CalledProcessError):
+                    macos.build_installers(self.bundle, "0.1.0", self.output)
+                self.assertEqual(len(attempts), expected_attempts)
+                self.assertEqual(previous.read_bytes(), b"previously verified image")
+                self.assertEqual(list(self.output.iterdir()), [previous])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 {
-  "created_utc": "2026-10-30T12:36:45.263499+00:00",
+  "created_utc": "2026-10-30T12:46:57.561896+00:00",
   "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
   "python": "3.12.14",
   "checks": [
@@ -13,23 +13,23 @@
     {
       "name": "interface",
       "exit_code": 0,
-      "seconds": 0.47,
+      "seconds": 0.41,
       "log": "build/validation/interface.log",
       "passed": true
     },
     {
       "name": "tests",
       "exit_code": 0,
-      "seconds": 36.3,
+      "seconds": 36.43,
       "log": "build/validation/tests.log",
       "passed": true,
-      "executed_tests": 162,
+      "executed_tests": 164,
       "skipped_tests": 1
     },
     {
       "name": "audio-video-smoke",
       "exit_code": 0,
-      "seconds": 4.78,
+      "seconds": 4.73,
       "log": "build/validation/audio-video-smoke.log",
       "passed": true
     },
@@ -71,5 +71,6 @@
     "virtualkvm/shared_gui.py": "f9bc4abfa1241096c1dc456e02503a362ad6be7232d999e86fa1b46711d7825c",
     "virtualkvm/transport.py": "c755483279990d887aa59107a269dd7d962c6adbbc0884307ad60eddf3ca2962"
   },
-  "passed": true
+  "passed": true,
+  "packaged_checks_scope": "The frozen application checks remain valid: application source hashes and bundled resources are unchanged by the macOS installer retry fix."
 }
