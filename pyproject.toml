@@ -9,7 +9,13 @@ description = "Encrypted desktop video and input sharing between Windows and mac
 readme = "README.md"
 requires-python = ">=3.11"
 # Qt 6.12 macOS binaries require macOS 26; see docs/validation/macos-qt-wheels.json.
-dependencies = ["cryptography>=44", "PySide6-Essentials>=6.8,<6.12", "PySide6-Addons>=6.8,<6.12", "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'"]
+dependencies = [
+    "cryptography>=44,<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "cryptography>=44; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "PySide6-Essentials>=6.8,<6.12",
+    "PySide6-Addons>=6.8,<6.12",
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
+]
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.11"]

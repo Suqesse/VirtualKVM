@@ -1,5 +1,7 @@
 # Validated desktop versions; Qt 6.11.3 supports the macOS 15 installer target.
-cryptography==50.0.2
+# Intel macOS uses the last official static-OpenSSL universal2 wheel.
+cryptography==48.0.1; sys_platform == "darwin" and platform_machine == "x86_64"
+cryptography==50.0.2; sys_platform != "darwin" or platform_machine != "x86_64"
 cffi==2.1.1
 pycparser==3.12
 PySide6-Essentials==6.11.3

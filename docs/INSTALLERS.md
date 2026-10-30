@@ -72,6 +72,8 @@ python scripts/installer.py
 
 ### macOS
 
+На Intel используется официальный universal2 wheel `cryptography 48.0.1` со статически встроенным OpenSSL; на остальных платформах — `50.0.2`. Это исключает подмену библиотеки при упаковке PyInstaller. CI запрещает неявную сборку `cryptography` из исходников. [Аудит связей и SHA-256 →](validation/macos-crypto-wheels.json)
+
 CI собирает FFmpeg 9.0.2 из официального исходного архива с проверкой SHA-256 и SRT/x264/x265. На Apple Silicon зависимости устанавливаются из Homebrew; на Intel они собираются из закреплённых исходников скриптом `scripts/build_media_deps_macos.sh`, без сборки всего дерева зависимостей Homebrew. Обычная формула `ffmpeg` может не включать SRT; для разработки из готового Homebrew-пакета используйте `ffmpeg-full`.
 
 ```bash

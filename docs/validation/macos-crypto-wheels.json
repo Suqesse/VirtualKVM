@@ -1,0 +1,62 @@
+{
+  "policy": "Use the official static-OpenSSL 48.0.1 wheel on Intel macOS, 50.0.2 elsewhere; require binary cryptography packages in native CI.",
+  "method": "Verify PyPI SHA-256 and inspect every Mach-O slice LC_LOAD_DYLIB and deployment command.",
+  "wheel_audits": [
+    {
+      "filename": "cryptography-48.0.1-cp311-abi3-macosx_10_9_universal2.whl",
+      "sha256": "3e4a1a3232eef2e6c732827d5722db29a0cc8b27af2a4d865b094cf954be9ca1",
+      "binaries": [
+        {
+          "path": "cryptography/hazmat/bindings/_rust.abi3.so",
+          "slices": [
+            {
+              "architecture": "x86_64",
+              "dylibs": [
+                "/usr/lib/libiconv.2.dylib",
+                "/usr/lib/libSystem.B.dylib"
+              ],
+              "minimum_macos": "10.13.0"
+            },
+            {
+              "architecture": "arm64",
+              "dylibs": [
+                "/usr/lib/libiconv.2.dylib",
+                "/usr/lib/libSystem.B.dylib"
+              ],
+              "minimum_macos": "11.0.0"
+            }
+          ]
+        }
+      ],
+      "private_libraries": [],
+      "version": "48.0.1",
+      "source_url": "https://files.pythonhosted.org/packages/1b/bc/ee4137cbbe105652c0ee4252792b78fc8e7afa4b8e61d9d5dc05a7f45731/cryptography-48.0.1-cp311-abi3-macosx_10_9_universal2.whl",
+      "expected_sha256": "3e4a1a3232eef2e6c732827d5722db29a0cc8b27af2a4d865b094cf954be9ca1",
+      "hash_verified_against_pypi": true
+    },
+    {
+      "filename": "cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl",
+      "sha256": "fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb",
+      "binaries": [
+        {
+          "path": "cryptography/hazmat/bindings/_rust.abi3.so",
+          "slices": [
+            {
+              "architecture": "arm64",
+              "dylibs": [
+                "/usr/lib/libiconv.2.dylib",
+                "/usr/lib/libSystem.B.dylib"
+              ],
+              "minimum_macos": "11.0.0"
+            }
+          ]
+        }
+      ],
+      "private_libraries": [],
+      "version": "50.0.2",
+      "source_url": "https://files.pythonhosted.org/packages/e5/56/d194340cc4a57535e82e1bee9e89667ac4b7c13b5d3f59686deae3094dd5/cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl",
+      "expected_sha256": "fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb",
+      "hash_verified_against_pypi": true
+    }
+  ]
+}
