@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Руководство и настройка
+    url: https://github.com/Suqesse/VirtualKVM/blob/main/docs/GUIDE.md
+    about: Установка, подключение, звук, брандмауэр и общая папка.

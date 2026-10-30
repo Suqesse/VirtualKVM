@@ -1,0 +1,8 @@
+# Validated desktop dependency versions; Qt's Essentials wheel pins shiboken6.
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12
+PySide6-Essentials==6.12.0
+PySide6-Addons==6.12.0
+shiboken6==6.12.0
+pyobjc-framework-Quartz>=10; sys_platform == "darwin"

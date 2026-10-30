@@ -1,0 +1,5 @@
+include LICENSE README.md requirements.lock
+include CONTRIBUTING.md CHANGELOG.md
+recursive-include docs *.md *.txt *.png *.svg *.json
+recursive-include scripts *.py
+recursive-include tests *.py

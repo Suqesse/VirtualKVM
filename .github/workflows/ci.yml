@@ -1,0 +1,72 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FFmpeg and Qt system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libegl1 libopengl0 libxkbcommon0
+      - name: Select headless audio backend (Linux)
+        if: runner.os == 'Linux'
+        run: echo "QT_AUDIO_BACKEND=pulseaudio" >> "$GITHUB_ENV"
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg-full -y --no-progress
+      - name: Install application
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Diagnose dependencies
+        run: python -m virtualkvm doctor
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Synthetic encrypted end-to-end check
+        run: python -m virtualkvm smoke --fps 240
+      - name: Synthetic synchronized audio/video check (muted)
+        run: python -m virtualkvm smoke --fps 240 --audio
+      - name: Build desktop distribution
+        run: |
+          python -m pip install pyinstaller
+          python scripts/package.py
+      - name: Archive desktop distribution with file modes preserved
+        shell: python
+        run: |
+          from pathlib import Path
+          import os, shutil
+          root = Path('dist')
+          bundle = root / 'VirtualKVM.app'
+          source = bundle if bundle.exists() else root / 'VirtualKVM'
+          kind = 'zip' if os.name == 'nt' else 'gztar'
+          shutil.make_archive('dist/VirtualKVM-${{ runner.os }}-${{ runner.arch }}', kind, root_dir='dist', base_dir=source.name)
+      - name: Upload platform distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: VirtualKVM-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/VirtualKVM-*.tar.gz
+            dist/VirtualKVM-*.zip
+          if-no-files-found: error

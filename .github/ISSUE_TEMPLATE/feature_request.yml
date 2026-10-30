@@ -1,0 +1,23 @@
+name: Идея или улучшение
+description: Предложить функцию или улучшить существующий сценарий.
+title: "[Идея]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу нужно решить
+      description: Что неудобно в текущем сценарии?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое поведение
+      description: Как это должно работать с точки зрения пользователя?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Дополнительный контекст
+      description: ОС, оборудование, примеры и альтернативы.

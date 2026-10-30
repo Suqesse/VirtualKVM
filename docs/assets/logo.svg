@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">VirtualKVM</title>
+  <rect width="128" height="128" rx="34" fill="#2dd4bf"/>
+  <path d="M26 34h76v50H26z" fill="none" stroke="#0b1320" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M50 98h28M64 84v14" fill="none" stroke="#0b1320" stroke-width="6" stroke-linecap="round"/>
+  <path d="m40 48 11 23 11-23m9 0v23m0-11 16-12m-16 12 16 11" fill="none" stroke="#0b1320" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

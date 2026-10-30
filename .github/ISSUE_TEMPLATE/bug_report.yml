@@ -1,0 +1,39 @@
+name: Ошибка
+description: Проблема подключения, изображения, звука, управления или файлов.
+title: "[Ошибка]: "
+body:
+  - type: markdown
+    attributes:
+      value: "Опишите проблему без PIN, ключей, сертификатов и личных файлов. Для аппаратных ошибок важны параметры обоих компьютеров."
+  - type: textarea
+    id: description
+    attributes:
+      label: Что произошло
+      description: Ожидаемый результат и фактическое поведение.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Как воспроизвести
+      placeholder: "1. Запустить хост…\n2. Выбрать…\n3. Подключиться…"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Компьютеры и настройки
+      description: ОС и версии, GPU, мониторы, разрешение, FPS, кодер, тип сети. Для звука — источник захвата.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Диагностика
+      description: Вывод python -m virtualkvm doctor и релевантные строки журнала. Удалите личные данные.
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Скриншоты
+      description: Для проблем интерфейса. Скрывайте PIN и личное содержимое экранов.

@@ -1,0 +1,63 @@
+{
+  "created_utc": "2026-10-30T08:50:47.116437+00:00",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "python": "3.12.14",
+  "checks": [
+    {
+      "name": "doctor",
+      "exit_code": 0,
+      "seconds": 0.16,
+      "log": "build/validation/doctor.log",
+      "passed": true
+    },
+    {
+      "name": "tests",
+      "exit_code": 0,
+      "seconds": 44.98,
+      "log": "build/validation/tests.log",
+      "passed": true,
+      "executed_tests": 85,
+      "skipped_tests": 0
+    },
+    {
+      "name": "audio-video-smoke",
+      "exit_code": 0,
+      "seconds": 4.73,
+      "log": "build/validation/audio-video-smoke.log",
+      "passed": true
+    },
+    {
+      "name": "archive-doctor",
+      "exit_code": 0,
+      "passed": true,
+      "log": "build/validation/archive-doctor.log",
+      "artifact": "dist/VirtualKVM-linux-x86_64.tar.gz"
+    },
+    {
+      "name": "archive-audio-video",
+      "exit_code": 0,
+      "passed": true,
+      "log": "build/validation/archive-audio-video.log",
+      "artifact": "dist/VirtualKVM-linux-x86_64.tar.gz"
+    }
+  ],
+  "scope": "Synthetic encrypted integration, UI, input dry-run, shared files and muted Qt audio/video playback. Native hardware capture, sound output and display throughput are not measured.",
+  "sources": {
+    "virtualkvm/__init__.py": "ffcc0b1b290d901af48d4d2c9cfad10602b50705cab7d5480a9158bd63d089e8",
+    "virtualkvm/__main__.py": "d3514a9a55cada361f7c80735e780461c9ee4a63a23beda04b179c04e7fb789d",
+    "virtualkvm/app.py": "5ecccef2ab022568cc09a8c963475b6a3c3fb6b4586657420a683d9394b96262",
+    "virtualkvm/control.py": "b6b580fda93d804797e064d34a5a81ecb6c80dce412b97ba78805f025870fe1f",
+    "virtualkvm/gui.py": "38027fbe95d26463f2005e7f36768f49d488da5f7603494e7a041909361bed2f",
+    "virtualkvm/media.py": "198604d86b22f53508f05dcd4b19f23011f7ba7c3144c6cc53b71c53e254181c",
+    "virtualkvm/native.py": "69a7d95b879a8c1d5767883f12492e1f03bea844b77577ab3e769e3c9c6aa9ff",
+    "virtualkvm/security.py": "6ac3dd0a9253e6f47709ad5b1251f344bd3ec5f038be19e315992e5962048efc",
+    "virtualkvm/shared.py": "7888cf9e86e59cff7b08974b61bd59ffdee2fa970edc44a9e57b907e9b5b8b1d",
+    "virtualkvm/shared_gui.py": "f9bc4abfa1241096c1dc456e02503a362ad6be7232d999e86fa1b46711d7825c"
+  },
+  "passed": true,
+  "artifact_integrity": {
+    "wheel_matches_source_manifest": true,
+    "sdist_contains_build_tools_and_docs": true,
+    "extracted_archive_verified_independently": true
+  }
+}
