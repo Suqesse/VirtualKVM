@@ -1,6 +1,6 @@
 # Third-party notices
 
-VirtualKVM application code is MIT-licensed; see `LICENSE` in the source tree or `licenses/VirtualKVM-MIT.txt` in a local distribution. This notice identifies direct runtime components. Their own license terms apply; an application MIT license does not replace them.
+VirtualKVM application code is MIT-licensed; see `LICENSE` in the source tree or `licenses/VirtualKVM-MIT.txt` in a local distribution. This notice identifies direct runtime components. Their own license terms apply; an application MIT license does not replace them. Native installers also include FFmpeg/ffprobe and their runtime dependency closure. Inspect `runtime/licenses`, `runtime/manifest.json`, and the source index there for the precise included build and upstream source locations.
 
 | Component | License / notice |
 | --- | --- |

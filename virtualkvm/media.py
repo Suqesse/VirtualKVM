@@ -1,6 +1,7 @@
 """FFmpeg-backed screen capture and encrypted SRT video transport.
 
-FFmpeg is a separate, user-installed executable. Only RGB video crosses into
+Packaged applications include a verified native FFmpeg runtime. Source checkouts
+can use explicitly selected or locally installed tools. Only RGB video crosses into
 Python; codec and transport work stays in FFmpeg. Callbacks run on a worker
 thread and should hand off promptly to the UI thread.
 """
@@ -11,12 +12,14 @@ from dataclasses import dataclass
 from functools import lru_cache
 import ipaddress
 import os
+from pathlib import Path
 import platform
 import queue
 import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from typing import Callable
@@ -89,23 +92,78 @@ class CaptureSource:
 
 
 def _popen_options() -> dict:
-    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+    options = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+    if getattr(sys, "frozen", False):
+        # PyInstaller's private Qt libraries must not override the media
+        # runtime's own dependency graph in subprocesses.
+        environment = dict(os.environ)
+        for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+            original = environment.get(name + "_ORIG")
+            if original is None:
+                environment.pop(name, None)
+            else:
+                environment[name] = original
+        options["env"] = environment
+    return options
 
 
 class FFmpegLocator:
     """Locate tools without downloading executables or changing system state."""
 
     def __init__(self, ffmpeg: str | None = None, ffprobe: str | None = None):
-        self.ffmpeg = self._locate(ffmpeg or os.environ.get("VIRTUALKVM_FFMPEG") or "ffmpeg")
+        explicit_ffmpeg = ffmpeg or os.environ.get("VIRTUALKVM_FFMPEG")
         probe_override = ffprobe or os.environ.get("VIRTUALKVM_FFPROBE")
-        self.ffprobe = self._locate(probe_override or "ffprobe", required=False)
-        if self.ffprobe is None and not probe_override:
-            self.ffprobe = self._locate(os.path.join(os.path.dirname(self.ffmpeg),
-                "ffprobe.exe" if os.name == "nt" else "ffprobe"), required=False)
+        bundled = self._bundled_pair() if not explicit_ffmpeg else None
+        self.ffmpeg = self._locate(explicit_ffmpeg) if explicit_ffmpeg else (bundled[0] if bundled else self._locate("ffmpeg"))
+        if probe_override:
+            self.ffprobe = self._locate(probe_override)
+        elif bundled:
+            self.ffprobe = bundled[1]
+        else:
+            sibling = os.path.join(os.path.dirname(self.ffmpeg), "ffprobe.exe" if os.name == "nt" else "ffprobe")
+            self.ffprobe = self._locate(sibling, required=False) or self._locate("ffprobe")
+
+    @staticmethod
+    def _bundle_directories() -> list[Path]:
+        executable = Path(sys.executable).resolve()
+        candidates = []
+        if getattr(sys, "_MEIPASS", None):
+            candidates.append(Path(sys._MEIPASS) / "runtime")
+        candidates += [executable.parent / "runtime", executable.parent / "_internal" / "runtime",
+                       executable.parent.parent / "Resources" / "runtime",
+                       Path(__file__).resolve().parent.parent / "runtime"]
+        return list(dict.fromkeys(candidates))
+
+    @classmethod
+    def _bundled_pair(cls):
+        extension = ".exe" if os.name == "nt" else ""
+        for directory in cls._bundle_directories():
+            ffmpeg, ffprobe = directory / ("ffmpeg" + extension), directory / ("ffprobe" + extension)
+            if ffmpeg.exists() or ffprobe.exists():
+                tools = (shutil.which(str(ffmpeg)), shutil.which(str(ffprobe)))
+                if not all(tools):
+                    raise MediaError("The packaged FFmpeg runtime is incomplete. Reinstall VirtualKVM from a complete installer.")
+                return tools
+        return None
 
     @staticmethod
     def _locate(command: str, required: bool = True) -> str | None:
         resolved = shutil.which(command)
+        if resolved is not None and platform.system() == "Windows" and os.path.basename(command) == command:
+            candidate = Path(resolved)
+            root = candidate.parent.parent
+            configured = os.environ.get("ChocolateyInstall")
+            is_shim = candidate.parent.name.lower() == "bin" and (
+                root.name.lower() == "chocolatey" or configured and root == Path(configured))
+            if is_shim:
+                matches = []
+                for package in ("ffmpeg-full", "ffmpeg"):
+                    location = root / "lib" / package
+                    if location.is_dir():
+                        matches.extend(p for p in location.rglob(candidate.name) if p.is_file())
+                if len(matches) != 1:
+                    raise MediaError("Select the real FFmpeg/ffprobe executable from the Chocolatey package tools folder; launcher shims cannot own the SRT listener")
+                resolved = str(matches[0].resolve())
         # Finder-launched macOS apps do not inherit a terminal's Homebrew PATH.
         # An explicit path override remains authoritative and is never replaced.
         if resolved is None and platform.system() == "Darwin" and os.path.basename(command) == command:
@@ -114,7 +172,9 @@ class FFmpegLocator:
                 if resolved is not None:
                     break
         if resolved is None and required:
-            raise MediaError(f"{command} was not found. Install FFmpeg with SRT support and add it to PATH.")
+            if getattr(sys, "frozen", False):
+                raise MediaError(f"{command} was not found in the packaged runtime. Reinstall VirtualKVM from a complete installer.")
+            raise MediaError(f"{command} was not found. Install FFmpeg with SRT support for source development and add it to PATH.")
         return resolved
 
     def _query(self, *args: str) -> str:

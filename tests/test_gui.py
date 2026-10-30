@@ -16,10 +16,10 @@ from unittest import mock
 
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QFocusEvent, QKeyEvent, QMouseEvent
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from virtualkvm.gui import MainWindow, VideoCanvas, normalized_key
+from common_qt import wait_ms
 
 
 class GuiTests(unittest.TestCase):
@@ -117,6 +117,25 @@ class GuiTests(unittest.TestCase):
         with mock.patch("virtualkvm.gui.sys.platform", "darwin"):
             self.assertEqual(normalized_key(event), "a")
 
+    def test_event_loop_wait_allows_python_worker_cleanup(self):
+        stop = threading.Event()
+        ticks = []
+
+        def cleanup_worker():
+            while not stop.wait(0.005):
+                ticks.append(True)
+
+        worker = threading.Thread(target=cleanup_worker, daemon=True)
+        worker.start()
+        try:
+            wait_ms(200)
+            # A GIL-retaining qWait allows only a post-return tick. Multiple
+            # worker turns prove cleanup can progress inside the event loop.
+            self.assertGreaterEqual(len(ticks), 3)
+        finally:
+            stop.set()
+            worker.join(timeout=1)
+
 
 class GuiControllerIntegration(unittest.TestCase):
     @classmethod
@@ -127,7 +146,7 @@ class GuiControllerIntegration(unittest.TestCase):
     def wait_for(self, predicate, timeout=15):
         deadline = time.monotonic() + timeout
         while not predicate() and time.monotonic() < deadline:
-            QTest.qWait(20)
+            wait_ms(20)
         self.assertTrue(predicate(), self.window.log.toPlainText())
 
     def test_profiles_custom_native_preferences_and_secret_exclusion(self):
@@ -187,11 +206,11 @@ class GuiControllerIntegration(unittest.TestCase):
             window = self.window
             window.resize(1024, 640)
             window.show()
-            QTest.qWait(80)
+            wait_ms(80)
             self.assertLessEqual(window.minimumHeight(), 600)
             self.assertGreater(window._scroll.verticalScrollBar().maximum(), 0)
             window._scroll.ensureWidgetVisible(window.connect_button)
-            QTest.qWait(30)
+            wait_ms(30)
             center = window.connect_button.mapTo(window._scroll.viewport(), window.connect_button.rect().center())
             self.assertTrue(window._scroll.viewport().rect().contains(center))
             self.assertGreater(window._scroll.verticalScrollBar().value(), 0)
@@ -229,7 +248,7 @@ class GuiControllerIntegration(unittest.TestCase):
                     self.wait_for(entered.is_set)
                     # Event processing stays responsive while network teardown
                     # is blocked; no synchronous Qt player stop has run yet.
-                    QTest.qWait(50)
+                    wait_ms(50)
                     self.assertEqual(qt_closes, [])
                     allow_finish.set()
                     if action == "disconnect":
@@ -284,7 +303,7 @@ class GuiControllerIntegration(unittest.TestCase):
                 primary.mute_action.setChecked(True)
                 self.assertTrue(primary._audio_output.isMuted())
                 primary.close()
-                QTest.qWait(600)
+                wait_ms(600)
                 self.assertIn(0, window._hidden_video_windows)
                 self.assertIn(1, window.video_windows)
                 self.assertTrue(window._viewer.connected)

@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest import mock
 
-from PySide6.QtTest import QTest
+from common_qt import wait_ms
 from PySide6.QtWidgets import QApplication
 
 from virtualkvm.control import HostServer, ViewerClient
@@ -66,7 +66,7 @@ class SharedFolderGuiTests(unittest.TestCase):
     def wait_ready(self, dialog):
         deadline = time.monotonic() + 6
         while dialog._busy and time.monotonic() < deadline:
-            QTest.qWait(20)
+            wait_ms(20)
         self.assertFalse(dialog._busy, dialog.status_label.text())
 
     def select(self, dialog, name):

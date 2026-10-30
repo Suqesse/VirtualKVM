@@ -8,10 +8,17 @@ import importlib.util
 from importlib import metadata
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
+
+if __package__:
+    from .icons import generate_icons
+else:
+    from icons import generate_icons
 
 
 def prepare_notices(root: Path, packaging_dir: Path) -> Path:
@@ -49,7 +56,7 @@ def prepare_notices(root: Path, packaging_dir: Path) -> Path:
     return notices
 
 
-def configure_macos_privacy(spec: Path) -> None:
+def configure_macos_privacy(spec: Path, version: str = "0.1.0") -> None:
     """Set purpose strings before BUNDLE creates/seals the .app, never after."""
     tree = ast.parse(spec.read_text(encoding="utf-8"))
     bundles = [node for node in ast.walk(tree)
@@ -58,6 +65,10 @@ def configure_macos_privacy(spec: Path) -> None:
     if len(bundles) != 1:
         raise RuntimeError("Expected one generated macOS BUNDLE in the PyInstaller spec")
     purposes = {
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": version,
+        "CFBundleName": "VirtualKVM",
+        "CFBundleDisplayName": "VirtualKVM",
         "NSHighResolutionCapable": True,
         "NSMicrophoneUsageDescription": "VirtualKVM streams your selected audio input to your paired computer over an encrypted LAN connection.",
         "NSScreenCaptureUsageDescription": "VirtualKVM streams your selected displays to your paired computer over an encrypted LAN connection.",
@@ -74,6 +85,9 @@ def configure_macos_privacy(spec: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--console", action="store_true", help="Keep a console for diagnostics")
+    parser.add_argument("--bundle-ffmpeg", action="store_true", help="Include FFmpeg/ffprobe and native dependencies; required for installers")
+    parser.add_argument("--ffmpeg", type=Path, help="Explicit FFmpeg binary to include")
+    parser.add_argument("--ffprobe", type=Path, help="Explicit ffprobe binary to include")
     args = parser.parse_args(argv)
     if importlib.util.find_spec("PyInstaller") is None:
         parser.exit(2, 'PyInstaller is missing. Install with: python -m pip install -e ".[build]"\n')
@@ -84,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
     packaging_dir = root / "build" / "packaging"
     packaging_dir.mkdir(parents=True, exist_ok=True)
     notices = prepare_notices(root, packaging_dir)
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        parser.error("A three-part numeric application version is required")
+    icons = generate_icons(root / "docs/assets/logo.svg", packaging_dir / "icons", macos=sys.platform == "darwin")
     # An absolute-import launcher also works when __main__.py uses package imports.
     with tempfile.TemporaryDirectory(prefix="launcher-", dir=packaging_dir) as temporary:
         launcher = Path(temporary) / "launcher.py"
@@ -99,12 +117,36 @@ def main(argv: list[str] | None = None) -> int:
             "--specpath", str(packaging_dir),
             "--console" if args.console else "--windowed",
         ]
+        if args.bundle_ffmpeg:
+            if __package__:
+                from .bundle_runtime import prepare_runtime
+            else:
+                from bundle_runtime import prepare_runtime
+            ffmpeg = args.ffmpeg or shutil.which("ffmpeg")
+            ffprobe = args.ffprobe or shutil.which("ffprobe")
+            if not ffmpeg or not ffprobe:
+                parser.error("Install FFmpeg/ffprobe or provide --ffmpeg and --ffprobe before bundling")
+            runtime = prepare_runtime(Path(ffmpeg), Path(ffprobe), Path(temporary))
+            specification_options += ["--add-data", f"{runtime}:runtime"]
+        if sys.platform == "win32":
+            specification_options += ["--icon", str(icons["ico"])]
+            version_file = Path(temporary) / "version.txt"
+            numeric = tuple(int(part) for part in version.split(".")) + (0,)
+            version_file.write_text(
+                f"VSVersionInfo(ffi=FixedFileInfo(filevers={numeric!r}, prodvers={numeric!r}, mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0,0)), "
+                f"kids=[StringFileInfo([StringTable('040904B0', [StringStruct('FileDescription','VirtualKVM'), StringStruct('ProductName','VirtualKVM'), StringStruct('FileVersion',{version!r}), StringStruct('ProductVersion',{version!r}), StringStruct('OriginalFilename','VirtualKVM.exe')])]), VarFileInfo([VarStruct('Translation',[1033,1200])])])",
+                encoding="utf-8")
+            specification_options += ["--version-file", str(version_file)]
         build_options = ["--noconfirm", "--clean", "--distpath", str(root / "dist"),
                          "--workpath", str(packaging_dir / "work")]
         environment = dict(os.environ)
         environment.setdefault("PYINSTALLER_CONFIG_DIR", str(packaging_dir / "cache"))
         if sys.platform == "darwin" and not args.console:
-            specification_options += ["--osx-bundle-identifier", "io.github.suqesse.virtualkvm"]
+            specification_options += ["--osx-bundle-identifier", "io.github.suqesse.virtualkvm", "--icon", str(icons["icns"])]
+            identity = environment.get("MACOS_APP_SIGN_IDENTITY")
+            if identity:
+                specification_options += ["--codesign-identity", identity,
+                    "--osx-entitlements-file", str(root / "packaging/macos/entitlements.plist")]
             # Usage descriptions belong in the generated BUNDLE configuration.
             # Editing Info.plist after PyInstaller seals the app invalidates it.
             generate = [sys.executable, "-m", "PyInstaller.utils.cliutils.makespec",
@@ -113,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             if prepared.returncode:
                 return prepared.returncode
             spec = packaging_dir / "VirtualKVM.spec"
-            configure_macos_privacy(spec)
+            configure_macos_privacy(spec, version)
             command = [sys.executable, "-m", "PyInstaller", *build_options, str(spec)]
         else:
             command = [sys.executable, "-m", "PyInstaller", *build_options,
@@ -121,8 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         result = subprocess.run(command, cwd=root, env=environment, check=False)
     if result.returncode == 0:
         print(f"Built in {root / 'dist'}")
-        print("FFmpeg/ffprobe must be installed separately and available in PATH.")
-        print("This is a local build; no signing identity or notarization was supplied.")
+        print("Bundled FFmpeg/ffprobe included." if args.bundle_ffmpeg else "FFmpeg/ffprobe must be installed separately and available in PATH.")
+        print("Installer generation: python scripts/installer.py")
     return result.returncode
 
 

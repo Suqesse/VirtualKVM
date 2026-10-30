@@ -30,11 +30,12 @@ class HostController:
         self.pin = pin or secrets.token_urlsafe(12)
         self.on_status = on_status or (lambda _: None)
         self.native = NativeInput(dry_run=synthetic)
-        self.displays = [asdict(d) for d in list_displays()]
         # A synthetic desktop can always exercise two independent streams.
         if synthetic:
             self.displays = [dict(index=i, name=f"Synthetic display {i + 1}",
                                   x=i * 1920, y=0, width=1920, height=1080) for i in range(2)]
+        else:
+            self.displays = [asdict(d) for d in list_displays()]
         self._lock = threading.RLock()
         self._pending = []
         self.senders = []

@@ -26,7 +26,7 @@ def smoke(fps=240, dual=True, audio=False):
             os.environ.setdefault("QT_AUDIO_BACKEND", "pulseaudio")
         from PySide6.QtWidgets import QApplication
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
-        from PySide6.QtCore import QUrl
+        from PySide6.QtCore import QUrl, QEventLoop, QTimer
         application = QApplication.instance() or QApplication([])
     with tempfile.TemporaryDirectory(prefix="virtualkvm-smoke-") as temporary:
         root = Path(temporary)
@@ -89,12 +89,15 @@ def smoke(fps=240, dual=True, audio=False):
                         player.setSource(QUrl(url))
                         player.play()
                         players.append((player, output, sink))
-                    application.processEvents()
+                    event_loop = QEventLoop()
+                    QTimer.singleShot(20, event_loop.quit)
+                    event_loop.exec()
                 with lock:
                     complete = all(frames.get(i, 0) >= 8 for i in selected)
                 if complete and clipboard and host_clipboard and len(host.native.events) >= 3:
                     break
-                time.sleep(0.02)
+                if not application:
+                    time.sleep(0.02)
             else:
                 details = [s.last_error for s in host.senders] + [r.last_error for r in viewer.receivers]
                 raise RuntimeError(f"End-to-end check timed out: frames={frames}; media={details}; status={statuses[-5:]}")
@@ -115,7 +118,9 @@ def smoke(fps=240, dual=True, audio=False):
                 player.stop()
                 player.setSource(QUrl())
             if application:
-                application.processEvents()
+                event_loop = QEventLoop()
+                QTimer.singleShot(30, event_loop.quit)
+                event_loop.exec()
 
 
 def main(argv=None):

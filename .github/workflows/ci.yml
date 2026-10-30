@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
@@ -20,8 +24,8 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUNBUFFERED: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install FFmpeg and Qt system libraries (Linux)
@@ -32,7 +36,9 @@ jobs:
         run: echo "QT_AUDIO_BACKEND=pulseaudio" >> "$GITHUB_ENV"
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
         run: choco install ffmpeg-full -y --no-progress

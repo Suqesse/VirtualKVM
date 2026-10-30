@@ -11,6 +11,12 @@ from virtualkvm.media import StreamConfig
 
 
 class ApplicationIntegration(unittest.TestCase):
+    def test_synthetic_host_never_queries_physical_displays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with unittest.mock.patch('virtualkvm.app.list_displays', side_effect=AssertionError('No desktop in CI')):
+                host=HostController(Path(directory), synthetic=True)
+            self.assertEqual(len(host.displays),2)
+
     def test_source_geometry_and_single_audio_stream_negotiation(self):
         with tempfile.TemporaryDirectory() as directory:
             host = HostController(Path(directory), synthetic=True)
