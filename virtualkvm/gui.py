@@ -9,6 +9,7 @@ from collections import deque
 import hashlib
 import json
 import os
+import socket
 from pathlib import Path
 import re
 import secrets
@@ -28,13 +29,16 @@ from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeyEvent, QKeySequence,
 from PySide6.QtNetwork import QAbstractSocket, QNetworkInterface
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit, QPushButton,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
     QFrame, QScrollArea, QSlider, QSpinBox, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 
 from .display_gui import DisplayMap, MonitorPanel, local_screens
 from .display_layout import MAX_STREAMS, Placement, arrange, display_inventory, fit_windows
+from .discovery import DiscoveryService, TrustStore, device_identifier
+from .lan_gui import AccessApprovalDialog, CodeConfirmationDialog, ComputerPicker
+from .pairing import AccessRequest
 
 
 class _Bridge(QObject):
@@ -44,6 +48,10 @@ class _Bridge(QObject):
     input_failed = Signal(str)
     shutdown_done = Signal()
     media = Signal(int, int, str, int, int)
+    devices = Signal(object)
+    access_request = Signal(object)
+    pairing_code = Signal(str)
+    verify_pairing = Signal(object)
 
 
 def _emit(signal, *args) -> None:
@@ -174,7 +182,9 @@ QPlainTextEdit { background: #ffffff; border: 1px solid #dce1e8; border-radius: 
 QToolButton { background: transparent; border: none; padding: 5px; color: #58697e; }
 QToolBar { background: #f3f5f8; border: none; spacing: 8px; padding: 7px; }
 QStatusBar { background: #f3f5f8; color: #697380; }
-QTableWidget, QTreeWidget { background: #ffffff; alternate-background-color: #f7f8fa; border: 1px solid #dce1e8; gridline-color: #e6e9ed; }
+QTableWidget, QTreeWidget, QListWidget { background: #ffffff; alternate-background-color: #f7f8fa; border: 1px solid #dce1e8; gridline-color: #e6e9ed; }
+QListWidget::item { padding: 7px; border-radius: 4px; margin: 2px; }
+QListWidget::item:selected { background: #e1e7ef; color: #253349; }
 QHeaderView::section { background: #eef1f5; color: #536073; padding: 7px; border: none; }
 QScrollArea { background: #f5f6f8; }
 QScrollBar:vertical { width: 10px; background: #f1f3f6; }
@@ -368,6 +378,7 @@ class VideoWindow(QMainWindow):
         self.av_frames = 0
         self._closing_media = False
         self._session_closing = False
+        self._keep_media_alive = False
         self.setWindowTitle(f"VirtualKVM · экран {display + 1}")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.canvas = VideoCanvas(display, send, emergency, self)
@@ -455,11 +466,12 @@ class VideoWindow(QMainWindow):
         self.canvas.set_input_enabled(enabled)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._player is not None and not self._session_closing:
+        if (self._player is not None or self._keep_media_alive) and not self._session_closing:
             # Keep reading the AV relay if the other monitor remains open.
             # Closing the HTTP reader prematurely breaks the host media stream.
             self.canvas.release_pressed()
-            self._audio_output.setMuted(True)
+            if self._audio_output is not None:
+                self._audio_output.setMuted(True)
             self.hide()
             self.closed.emit(self.display)
             event.ignore()
@@ -477,7 +489,7 @@ class VideoWindow(QMainWindow):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, state_dir: Path | None = None):
+    def __init__(self, state_dir: Path | None = None, *, networking=False):
         super().__init__()
         default_state = (Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VirtualKVM"
                          if sys.platform == "win32" else Path.home() / ".virtualkvm")
@@ -489,6 +501,18 @@ class MainWindow(QMainWindow):
         self._bridge.input_failed.connect(self._input_failed)
         self._bridge.shutdown_done.connect(self._shutdown_finished)
         self._bridge.media.connect(self._receive_media)
+        self._bridge.devices.connect(self._show_computers)
+        self._bridge.access_request.connect(self._approve_access)
+        self._bridge.pairing_code.connect(lambda code: self.lan_panel.show_code(code))
+        self._bridge.verify_pairing.connect(self._verify_pairing)
+        self._networking = networking
+        self._discovery = None
+        self._trust_store = TrustStore(self.state_dir)
+        self._quick_device = None
+        self._quick_connecting = False
+        self._approval_dialogs = []
+        self._awaiting_video_at = None
+        self._disconnect_reason = None
         self._host = self._viewer = self._pump = None
         self._host_epoch = self._viewer_epoch = 0
         self._host_running = self._connecting = self._disconnecting = False
@@ -556,7 +580,7 @@ class MainWindow(QMainWindow):
         release.clicked.connect(self.emergency_release)
         shared.addWidget(release)
         layout.addLayout(shared)
-        self.status_label = QLabel("Начните с запуска хоста на втором компьютере. Затем введите его адрес, PIN и отпечаток.")
+        self.status_label = QLabel("Выберите компьютер в списке. При первом подключении сверьте короткий код на двух экранах.")
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -601,6 +625,8 @@ class MainWindow(QMainWindow):
         self._load_preferences()
         self.monitor_layout.changed.connect(self._save_preferences)
         QTimer.singleShot(0, self._refresh_host_displays)
+        if networking:
+            QTimer.singleShot(100, self._start_host)
 
     @staticmethod
     def _spin(low: int, high: int, value: int, step: int = 1) -> QSpinBox:
@@ -700,6 +726,14 @@ class MainWindow(QMainWindow):
         self.host_pin.textChanged.connect(self._validate_host_pin)
         buttons.addWidget(self.host_start)
         buttons.addWidget(self.host_stop)
+        self.host_disconnect = QPushButton("Прекратить сеанс")
+        self.host_disconnect.setEnabled(False)
+        self.host_disconnect.clicked.connect(lambda: self._host.server.disconnect_viewer() if self._host else None)
+        buttons.addWidget(self.host_disconnect)
+        self.host_session_label = QLabel("Нет активного подключения")
+        self.host_session_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.host_session_label.setWordWrap(True)
+        layout.addWidget(self.host_session_label)
         buttons.addStretch()
         layout.addLayout(buttons)
         self.display_label = QLabel("Можно передавать от 1 до 8 экранов, которые доступны в ОС.")
@@ -717,7 +751,7 @@ class MainWindow(QMainWindow):
         screen_help.setWordWrap(True)
         screen_help.setObjectName("muted")
         layout.addWidget(screen_help)
-        note = QLabel("Сверьте полный отпечаток перед подключением. Полученные отдельные файлы: Downloads/VirtualKVM.")
+        note = QLabel("Новый клиент подтверждается коротким кодом сеанса. Полученные отдельные файлы: Downloads/VirtualKVM.")
         note.setWordWrap(True)
         note.setObjectName("muted")
         layout.addWidget(note)
@@ -729,7 +763,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(22, 24, 22, 22)
         columns = QHBoxLayout()
         columns.setSpacing(22)
-        connection = QGroupBox("Хост")
+        connection = QGroupBox("Ручное подключение")
         form = QFormLayout(connection)
         form.setSpacing(14)
         self.peer_host = QLineEdit()
@@ -737,19 +771,25 @@ class MainWindow(QMainWindow):
         self.peer_port = self._spin(1024, 65535, 24800)
         self.peer_pin = QLineEdit()
         self.peer_pin.setEchoMode(QLineEdit.EchoMode.Password)
+        self.peer_pin.setPlaceholderText("Только для старого режима подключения")
         self.peer_fingerprint = QLineEdit()
-        self.peer_fingerprint.setPlaceholderText("Вставьте полный SHA-256 отпечаток хоста")
+        self.peer_fingerprint.setPlaceholderText("Необязательно: пустое поле — подтверждение кодом на хосте")
         form.addRow("Адрес хоста", self.peer_host)
         form.addRow("Порт", self.peer_port)
         form.addRow("PIN", self.peer_pin)
-        form.addRow("Отпечаток", self.peer_fingerprint)
+        form.addRow("Ключ старой версии", self.peer_fingerprint)
         self.audio_enabled = QCheckBox("Передавать звук")
-        form.addRow(self.audio_enabled)
         audio_note = QLabel("Звук синхронизирован с видео первой строки схемы экранов.")
         audio_note.setWordWrap(True)
         audio_note.setObjectName("muted")
-        form.addRow(audio_note)
-        columns.addWidget(connection, 1)
+        computers = QGroupBox("Компьютеры в сети")
+        computer_layout = QVBoxLayout(computers)
+        self.lan_panel = ComputerPicker()
+        self.lan_panel.connect_requested.connect(self._connect_quick)
+        self.lan_panel.refresh_requested.connect(self._refresh_computers)
+        self.lan_panel.visibility_changed.connect(self._lan_visibility_changed)
+        computer_layout.addWidget(self.lan_panel)
+        columns.addWidget(computers, 1)
         quality = QGroupBox("Изображение")
         quality_form = QFormLayout(quality)
         quality_form.setSpacing(12)
@@ -789,12 +829,18 @@ class MainWindow(QMainWindow):
         quality_form.addRow("Разрешение", self.resolution_preset)
         quality_form.addRow("Свой размер", resolution)
         quality_form.addRow("Частота · FPS", self.frame_rate)
+        quality_form.addRow(self.audio_enabled)
+        quality_form.addRow(audio_note)
         advanced = QGroupBox("Параметры кодирования")
         advanced_form = QFormLayout(advanced)
         advanced_form.addRow("Кодек", self.codec)
         advanced_form.addRow("Видеокодер", self.encoder)
         advanced_form.addRow("Мбит/с на экран", self.bitrate)
         advanced_form.addRow("Буфер · мс", self.latency)
+        self.video_transport = QComboBox()
+        self.video_transport.addItem("Защищённый TCP · без входящих портов на клиенте", "tcp")
+        self.video_transport.addItem("UDP / SRT · требуется доступ в брандмауэре", "srt")
+        advanced_form.addRow("Передача видео", self.video_transport)
         advanced.setVisible(False)
         advanced_toggle = QToolButton()
         advanced_toggle.setText("Дополнительные параметры")
@@ -810,6 +856,15 @@ class MainWindow(QMainWindow):
         self.resolution_preset.setCurrentIndex(self._resolution_index(1920, 1080))
         columns.addWidget(quality, 1)
         layout.addLayout(columns, 1)
+        self.manual_toggle = QToolButton()
+        self.manual_toggle.setText("Подключиться по адресу…")
+        self.manual_toggle.setCheckable(True)
+        self.manual_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.manual_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.manual_toggle.toggled.connect(connection.setVisible)
+        connection.hide()
+        layout.addWidget(self.manual_toggle)
+        layout.addWidget(connection)
         monitors = QGroupBox("Экраны")
         monitor_form = QVBoxLayout(monitors)
         self.monitor_layout = MonitorPanel()
@@ -825,7 +880,9 @@ class MainWindow(QMainWindow):
         self.connect_button.setObjectName("primaryButton")
         self.disconnect_button = QPushButton("Отключиться")
         self.disconnect_button.setEnabled(False)
-        self.connect_button.clicked.connect(self._connect_viewer)
+        self.connect_button.clicked.connect(lambda: self._connect_viewer())
+        self.connect_button.hide()
+        self.manual_toggle.toggled.connect(self.connect_button.setVisible)
         self.disconnect_button.clicked.connect(self._disconnect_viewer)
         self.send_file_button = QPushButton("Отправить файл…")
         self.send_file_button.setEnabled(False)
@@ -841,7 +898,8 @@ class MainWindow(QMainWindow):
         self._viewer_fields = (self.peer_host, self.peer_port, self.peer_pin, self.peer_fingerprint,
             self.monitor_layout, self.video_width,
             self.video_height, self.frame_rate, self.bitrate, self.latency, self.encoder,
-            self.profile, self.native_resolution, self.preserve_aspect, self.resolution_preset, self.audio_enabled, self.codec)
+            self.profile, self.native_resolution, self.preserve_aspect, self.resolution_preset, self.audio_enabled, self.codec,
+            self.lan_panel, self.manual_toggle, self.video_transport)
         for field in (self.frame_rate, self.bitrate, self.latency):
             field.valueChanged.connect(self._custom_profile)
         self.video_width.valueChanged.connect(self._dimensions_changed)
@@ -856,12 +914,99 @@ class MainWindow(QMainWindow):
         return (self.peer_host.text().strip(), self.peer_port.value(),
                 re.sub(r"[:\s]", "", self.peer_fingerprint.text()).lower(), self.peer_pin.text())
 
+    def _show_computers(self, devices):
+        if not self._closing:
+            self.lan_panel.set_devices(devices, self._trust_store)
+
+    def _start_discovery(self):
+        if not self._networking or self._host is None or not self._host_running:
+            return
+        port = self._host.server.address[1] if self.lan_panel.visible_on_lan.isChecked() else 0
+        if self._discovery is not None:
+            service = self._discovery
+            self._task("discovery-port", 0, service, lambda: service.set_port(port))
+            return
+        addresses = [address.toString() for address in QNetworkInterface.allAddresses()
+                     if address.protocol() == QAbstractSocket.NetworkLayerProtocol.IPv4Protocol
+                     and not address.isLoopback() and not address.isNull()]
+        try:
+            service = DiscoveryService(device_identifier(self.state_dir), socket.gethostname(), addresses or ["127.0.0.1"],
+                port, self._host.fingerprint,
+                lambda devices: _emit(self._bridge.devices, devices))
+            self._discovery = service
+            self.lan_panel.refresh.setEnabled(False)
+            self._task("discovery-start", 0, service, service.start)
+        except Exception as error:
+            self._status(f"Поиск компьютеров недоступен: {error}. Можно подключиться по адресу.")
+
+    def _refresh_computers(self):
+        if self._discovery:
+            self.lan_panel.refresh.setEnabled(False)
+            self._task("discovery-refresh", 0, self._discovery, self._discovery.refresh)
+        elif self._networking:
+            self._start_host() if self._host is None else self._start_discovery()
+        else:
+            self._status("Поиск включается при обычном запуске приложения.")
+
+    def _lan_visibility_changed(self, enabled):
+        if self._closing:
+            return
+        if self._host:
+            self._host.server.on_access_request = (lambda request: _emit(self._bridge.access_request, request)) if enabled else None
+        if enabled:
+            self._networking = True
+            self._refresh_computers()
+        else:
+            for dialog in self._approval_dialogs:
+                dialog.reject()
+            service = self._discovery
+            if service:
+                self._task("discovery-port", 0, service, lambda: service.set_port(0))
+
+    def _approve_access(self, request):
+        if self._closing or not self.lan_panel.visible_on_lan.isChecked():
+            request.resolve()
+            return
+        dialog = AccessApprovalDialog(request, self)
+        self._approval_dialogs.append(dialog)
+        dialog.finished.connect(lambda _: self._approval_dialogs.remove(dialog) if dialog in self._approval_dialogs else None)
+        dialog.accepted.connect(lambda: self.clipboard_enabled.setChecked(True) if dialog.clipboard.isChecked() else None)
+        dialog.open()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _connect_quick(self, device):
+        if self._viewer is not None or self._closing:
+            return
+        if self._trust_store.state(device) == "changed":
+            choice = QMessageBox.warning(self, "Ключ компьютера изменился",
+                "У этого компьютера изменился ключ. Это бывает после переустановки, но может означать подмену. "
+                "Продолжайте только после сверки нового кода с владельцем.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if choice != QMessageBox.StandardButton.Yes:
+                return
+        self._connect_viewer(device)
+
+    def _verify_pairing(self, request):
+        if self._closing or self._disconnecting:
+            request.resolve()
+            return
+        dialog = CodeConfirmationDialog(request, self)
+        self._approval_dialogs.append(dialog)
+        dialog.finished.connect(lambda _: self._approval_dialogs.remove(dialog) if dialog in self._approval_dialogs else None)
+        dialog.open()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def _peer_changed(self, *args):
         self._known_peer = None
         self.monitor_layout.inventory = []
         self.monitor_layout._refresh()
 
     def _discover_displays(self):
+        if not self.manual_toggle.isChecked() and self.lan_panel.selected() is not None:
+            self._connect_quick(self.lan_panel.selected())
+            return
         if self._scanning_displays or self._viewer is not None or self._closing:
             return
         host, port, fingerprint, pin = self._peer_signature()
@@ -1003,6 +1148,30 @@ class MainWindow(QMainWindow):
         return text
 
     def _update_stats(self) -> None:
+        if self._host is not None:
+            sessions = self._host.server.sessions
+            self.host_disconnect.setEnabled(bool(sessions))
+            if sessions:
+                session = sessions[0]
+                mode = "управление разрешено" if session["permissions"]["control"] else "только просмотр"
+                self.host_session_label.setText(f"Подключён: {session['name'] or session['host']} · {mode}")
+            else:
+                self.host_session_label.setText("Нет активного подключения")
+        if self._awaiting_video_at is not None and self._viewer is not None and not self._disconnecting:
+            ready = all(index in self.video_windows and
+                        (self.video_windows[index].av_frames or self.video_windows[index].canvas.painted_frames)
+                        for index in self._requested_displays if index not in self._suppressed_displays)
+            if ready:
+                self._awaiting_video_at = None
+                self.connection_badge.setText("●  Изображение получено")
+                self._status("Экран другого компьютера открыт. Ctrl+Alt+Shift+Escape — вернуть управление.")
+            elif time.monotonic() - self._awaiting_video_at >= 20:
+                self._awaiting_video_at = None
+                reason = ("Управление подключилось, но изображение не пришло за 20 секунд. "
+                          "Проверьте разрешение записи экрана на хосте и выбранный кодер. "
+                          "Для UDP/SRT проверьте брандмауэр или выберите защищённый TCP.")
+                self._status(reason)
+                self._disconnect_viewer(reason)
         now = time.monotonic()
         elapsed = max(now - self._stats_at, 0.001)
         self._stats_at = now
@@ -1023,10 +1192,14 @@ class MainWindow(QMainWindow):
             self._stats_samples[index] = (presented, decoded or 0)
 
     def _receive_media(self, epoch: int, index: int, url: str, width: int, height: int) -> None:
-        if self._closing or epoch != self._viewer_epoch or self._disconnecting or index in self._suppressed_displays:
+        if (self._closing or epoch != self._viewer_epoch or self._disconnecting or
+                index in self._suppressed_displays and index not in self._hidden_video_windows):
             return
         try:
-            self._video_window(index).start_media(url, width, height)
+            window = self._video_window(index)
+            window.start_media(url, width, height)
+            if index in self._hidden_video_windows:
+                window._audio_output.setMuted(True)
         except Exception as error:
             self._status(f"Не удалось запустить звук и видео: {error}")
             self._disconnect_viewer()
@@ -1046,6 +1219,8 @@ class MainWindow(QMainWindow):
                     native_resolution=self.native_resolution.isChecked(),
                     preserve_aspect=self.preserve_aspect.isChecked(),
                     audio=self.audio_enabled.isChecked(), audio_device=self._audio_device_value(),
+                    video_transport=self.video_transport.currentData(),
+                    lan_visible=self.lan_panel.visible_on_lan.isChecked(),
                     monitor_layout=self.monitor_layout.encode())
         # Deliberately exclude PINs, certificate fingerprints and sharing/write
         # consent. A stored address must never silently authorize another peer.
@@ -1072,6 +1247,9 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError):
             return
         self._applying_profile = True
+        if type(data.get("lan_visible")) is bool:
+            self.lan_panel.visible_on_lan.setChecked(data["lan_visible"])
+        self.video_transport.setCurrentIndex(max(0, self.video_transport.findData(data.get("video_transport", "tcp"))))
         for name, field in self._preference_fields().items():
             value = data.get(name)
             if isinstance(field, QSpinBox) and type(value) is int:
@@ -1112,6 +1290,13 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         message = str(message)[:4096]
+        message = {"Host listening": "Хост принимает подключения", "Host stopped": "Хост остановлен",
+                   "Viewer connected": "К хосту подключился клиент", "Viewer disconnected": "Клиент отключился",
+                   "Connected": "Защищённое подключение установлено", "Disconnected": "Соединение закрыто",
+                   "Video streams started": "Захват экранов запущен"}.get(message, message)
+        if self._viewer is not None and message.startswith(("Video failed:", "Control connection failed:",
+                                                           "Защищённый видеопоток прерван:")):
+            self._disconnect_reason = message
         for pin in (self.host_pin.text(), self.peer_pin.text()):
             if len(pin) >= 4:
                 message = message.replace(pin, "[redacted]")
@@ -1162,6 +1347,8 @@ class MainWindow(QMainWindow):
                 shared_dir=Path(self.shared_path.text()) if self.share_enabled.isChecked() else None,
                 shared_writable=self.shared_writable.isChecked() if self.share_enabled.isChecked() else False,
                 allow_port_fallback=True)
+            if self.lan_panel.visible_on_lan.isChecked():
+                self._host.server.on_access_request = lambda request: _emit(self._bridge.access_request, request)
         except Exception as error:
             self._status(f"Не удалось создать хост: {error}")
             return
@@ -1190,15 +1377,18 @@ class MainWindow(QMainWindow):
         self._host_epoch += 1
         self._task("host-stop", self._host_epoch, self._host, self._host.stop)
 
-    def _connect_viewer(self) -> None:
+    def _connect_viewer(self, device=None) -> None:
         if self._viewer is not None or self._closing or self._scanning_displays:
             return
-        fingerprint = re.sub(r"[:\s]", "", self.peer_fingerprint.text()).lower()
-        if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        quick = device is not None or not self.peer_fingerprint.text().strip()
+        fingerprint = device.fingerprint if device is not None else re.sub(r"[:\s]", "", self.peer_fingerprint.text()).lower()
+        if device is None and quick:
+            fingerprint = None
+        if fingerprint is not None and not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
             self._status("Вставьте и сверьте полный SHA-256 отпечаток: 64 шестнадцатеричных символа.")
             return
-        host = self.peer_host.text().strip()
-        if not host or any(character.isspace() for character in host) or not self.peer_pin.text():
+        host = device.address if device is not None else self.peer_host.text().strip()
+        if not host or any(character.isspace() for character in host) or not quick and not self.peer_pin.text():
             self._status("Введите адрес второго компьютера и его PIN.")
             return
         try:
@@ -1207,12 +1397,14 @@ class MainWindow(QMainWindow):
             self._status(str(error))
             return
         displays = [entry.source for entry in self.monitor_layout.entries]
+        if quick:
+            self.monitor_layout.inventory = []
         config = {"width": self.video_width.value(), "height": self.video_height.value(),
                   "fps": self.frame_rate.value(), "bitrate_mbps": self.bitrate.value(),
                   "codec": self.codec.currentData(), "encoder": self.encoder.currentText(),
                   "latency_ms": self.latency.value(), "source_resolution": self.native_resolution.isChecked(),
                   "preserve_aspect": self.preserve_aspect.isChecked(),
-                  "audio": self.audio_enabled.isChecked()}
+                  "audio": self.audio_enabled.isChecked(), "transport": self.video_transport.currentData()}
         if config["width"] * config["height"] > 67108864 and not config["source_resolution"]:
             self._status("Выберите разрешение до 64 мегапикселей на экран.")
             return
@@ -1232,21 +1424,44 @@ class MainWindow(QMainWindow):
         self._requested_displays = displays
         self._stats_samples.clear()
         self._connecting = True
+        self._disconnect_reason = None
+        self._quick_device, self._quick_connecting = device, quick
+        self.lan_panel.code.clear()
         self._set_viewer_fields(False)
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(True)
         controller = self._viewer
         # Read widget values before crossing the Qt thread boundary.
-        port, pin = self.peer_port.value(), self.peer_pin.text()
+        port, pin = (device.port, None) if device is not None else (self.peer_port.value(), self.peer_pin.text())
+        control = self.lan_panel.control.isChecked()
+        approval_options = dict(approval=True, name=socket.gethostname()[:80], control=control,
+            on_pairing_code=lambda code: _emit(self._bridge.pairing_code, code)) if quick else {}
+        if quick and (device is None or self._trust_store.state(device) != "known"):
+            target_name = device.name if device is not None else host
+            def confirm(code):
+                request = AccessRequest(target_name, code, False)
+                _emit(self._bridge.verify_pairing, request)
+                return request.wait(controller._cancelled) is not None
+            approval_options["confirm_pairing"] = confirm
         self.connection_badge.setText("●  Подключаемся…")
         self._status("Проверяем отпечаток и устанавливаем безопасное соединение…")
-        self._task("viewer-connect", epoch, controller,
-                   lambda: controller.connect(host, port, pin, fingerprint, displays, config))
+        def connect():
+            identity = fingerprint
+            if identity is None:
+                from .security import probe_fingerprint
+                identity = probe_fingerprint(host, port)
+            controller.connect(host, port, pin, identity, displays, config, **approval_options)
+        self._task("viewer-connect", epoch, controller, connect)
 
-    def _disconnect_viewer(self) -> None:
+    def _disconnect_viewer(self, reason=None) -> None:
         if self._viewer is None or self._disconnecting:
             return
         self._disconnecting = True
+        if isinstance(reason, str):
+            self._disconnect_reason = reason
+        if self._connecting:
+            self._viewer.cancel_connect()
+        self._awaiting_video_at = None
         self._viewer_epoch += 1
         self.emergency_release()
         self.control_enabled.setEnabled(False)
@@ -1276,7 +1491,10 @@ class MainWindow(QMainWindow):
                 self.host_fingerprint.setText(str(owner.fingerprint))
                 self._show_host_displays(owner.displays)
                 self.connection_badge.setText("●  Хост доступен")
-                self._status("Хост запущен. Передайте адрес, PIN и отпечаток на второй компьютер.")
+                self._status("Компьютер готов к запросам. Выберите его имя в списке на другом ПК." if
+                             self.lan_panel.visible_on_lan.isChecked() else
+                             "Показ этого компьютера в сети выключен. Можно искать другие компьютеры или включить показ.")
+                self._start_discovery()
             else:
                 if kind == "host-start":
                     self._task("host-stale", -1, owner, owner.stop)
@@ -1285,6 +1503,9 @@ class MainWindow(QMainWindow):
                 self.host_start.setEnabled(True)
                 self.host_stop.setEnabled(False)
                 self._host_fields(True)
+                if self._discovery:
+                    service = self._discovery
+                    self._task("discovery-port", 0, service, lambda: service.set_port(0))
                 self.connection_badge.setText("●  Готов к подключению")
                 self._status(f"Ошибка хоста: {error}" if error else "Хост остановлен.")
         elif kind.startswith("viewer"):
@@ -1294,6 +1515,10 @@ class MainWindow(QMainWindow):
                 return
             if kind == "viewer-connect" and error is None:
                 try:
+                    self._requested_displays = owner.selected_displays or self._requested_displays
+                    if self._quick_connecting:
+                        entries = {entry.source: entry for entry in self.monitor_layout.entries}
+                        self.monitor_layout.set_entries([entries.get(index, Placement(index)) for index in self._requested_displays])
                     self.monitor_layout.set_inventory(owner.displays)
                 except ValueError as failure:
                     self._status(f"Некорректный список экранов: {failure}")
@@ -1306,11 +1531,20 @@ class MainWindow(QMainWindow):
                 self._connecting = False
                 self._pump = _InputPump(owner.send_event,
                     lambda text: _emit(self._bridge.input_failed, text))
-                self.control_enabled.setEnabled(True)
-                self.send_file_button.setEnabled(True)
-                self.shared_browser_button.setEnabled(True)
-                self.connection_badge.setText("●  Соединение защищено")
-                self._status("Вы подключены. Видеопоток откроется в отдельных окнах. Включите управление, когда будете готовы.")
+                permissions = owner.client.permissions
+                self.control_enabled.setEnabled(permissions.control)
+                self.send_file_button.setEnabled(permissions.files)
+                self.shared_browser_button.setEnabled(permissions.files and owner.shared_info.get("enabled", False))
+                self.clipboard_enabled.setEnabled(permissions.clipboard)
+                self.connection_badge.setText("●  Ожидаем изображение")
+                if self._quick_device is not None:
+                    self._trust_store.remember(self._quick_device)
+                for index in self._requested_displays:
+                    self._video_window(index)
+                if self._quick_connecting and permissions.control and self.lan_panel.control.isChecked():
+                    self.control_enabled.setChecked(True)
+                self._awaiting_video_at = time.monotonic()
+                self._status("Подключение подтверждено. Окна экранов открыты, ожидаем изображение…")
             else:
                 if kind == "viewer-connect":
                     self._task("viewer-stale", -1, owner, owner.disconnect)
@@ -1324,8 +1558,22 @@ class MainWindow(QMainWindow):
                 self.shared_browser_button.setEnabled(False)
                 self.control_enabled.setChecked(False)
                 self.control_enabled.setEnabled(False)
+                self.clipboard_enabled.setEnabled(True)
+                self._awaiting_video_at = None
+                self.lan_panel.code.clear()
+                self._quick_device = None
+                self._quick_connecting = False
                 self.connection_badge.setText("●  Хост доступен" if self._host_running else "●  Готов к подключению")
-                self._status(f"Не удалось подключиться: {error}" if error else "Отключено. Клавиатура и мышь освобождены.")
+                self._status(f"Не удалось подключиться: {error}" if error else self._disconnect_reason or
+                             "Отключено. Клавиатура и мышь освобождены.")
+        elif kind.startswith("discovery-"):
+            self.lan_panel.refresh.setEnabled(True)
+            if kind == "discovery-start" and error is None and not self.lan_panel.visible_on_lan.isChecked():
+                self._task("discovery-port", 0, owner, lambda: owner.set_port(0))
+            if error:
+                self._status(f"Поиск компьютеров недоступен: {error}. Используйте подключение по адресу.")
+                if kind == "discovery-start" and self._discovery is owner:
+                    self._discovery = None
         elif kind == "display-discovery":
             self._scanning_displays = False
             self.monitor_layout.discover.setEnabled(self._viewer is None)
@@ -1385,8 +1633,9 @@ class MainWindow(QMainWindow):
             return
         if (self._viewer is not None and not self._connecting and not self._disconnecting
                 and not self._viewer.connected):
-            self._status("Соединение потеряно. Возвращаем управление.")
-            self._disconnect_viewer()
+            reason = self._disconnect_reason or "Соединение потеряно. Возвращаем управление."
+            self._status(reason)
+            self._disconnect_viewer(reason)
             return
         with self._frames_lock:
             frames, self._frames = self._frames, {}
@@ -1398,7 +1647,7 @@ class MainWindow(QMainWindow):
             self._video_window(index).canvas.set_frame(rgb, width, height)
 
     def _video_window(self, index: int) -> VideoWindow:
-        window = self.video_windows.get(index)
+        window = self.video_windows.get(index) or self._hidden_video_windows.get(index)
         if window is None:
             window = VideoWindow(index, self._send_input, self.emergency_release,
                                  self.control_enabled.setChecked, self.control_enabled.isChecked())
@@ -1406,6 +1655,7 @@ class MainWindow(QMainWindow):
             window.closed.connect(self._video_closed)
             window.media_error.connect(self._media_failed)
             self.video_windows[index] = window
+            window._keep_media_alive = self._viewer is not None and index in getattr(self._viewer, "audio_displays", set())
             self._place_video_window(index, window)
         return window
 
@@ -1419,14 +1669,15 @@ class MainWindow(QMainWindow):
             window.showFullScreen()
         else:
             window.show()
+        window.raise_()
 
     def _media_failed(self, message: str) -> None:
         self._status(message)
-        self._disconnect_viewer()
+        self._disconnect_viewer(message)
 
     def _video_closed(self, index: int) -> None:
         window = self.video_windows.pop(index, None)
-        if window is not None and window._player is not None and not window._session_closing:
+        if window is not None and (window._player is not None or window._keep_media_alive) and not window._session_closing:
             self._hidden_video_windows[index] = window
         self._suppressed_displays.add(index)
         if not self.video_windows and not self._closing and not self._disconnecting and self._viewer:
@@ -1544,6 +1795,10 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self._save_preferences()
+        for dialog in list(self._approval_dialogs):
+            dialog.reject()
+        if self._viewer is not None and self._connecting:
+            self._viewer.cancel_connect()
         self.emergency_release()
         self._closing = True
         self.setEnabled(False)
@@ -1555,12 +1810,15 @@ class MainWindow(QMainWindow):
         if self._pump:
             self._pump.stop()
         host, viewer = self._host, self._viewer
+        discovery, self._discovery = self._discovery, None
 
         def shutdown():
             # Wait for pending startup before teardown, so it cannot spawn a
             # capture child after the controller was stopped.
             for thread in list(self._threads):
                 thread.join(timeout=8)
+            if discovery:
+                discovery.stop()
             for owner, operation in ((viewer, "disconnect"), (host, "stop")):
                 if owner:
                     try:
@@ -1587,6 +1845,6 @@ def run_gui() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("VirtualKVM")
     app.setOrganizationName("VirtualKVM")
-    window = MainWindow()
+    window = MainWindow(networking=True)
     window.show()
     return app.exec()

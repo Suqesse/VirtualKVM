@@ -51,6 +51,8 @@ class PackagingToolsTests(unittest.TestCase):
             exec(compile(spec.read_text(),str(spec),'exec'),{'BUNDLE':lambda *a,**kw:captured.update(kw)})
             self.assertEqual(captured['info_plist']['CFBundleShortVersionString'],'1.2.3')
             self.assertIn('NSMicrophoneUsageDescription',captured['info_plist'])
+            self.assertIn('NSLocalNetworkUsageDescription',captured['info_plist'])
+            self.assertEqual(captured['info_plist']['NSBonjourServices'],['_virtualkvm._tcp','_vkvm-check._tcp'])
 
     def test_media_subprocess_restores_original_loader_environment_only_when_frozen(self):
         values={'LD_LIBRARY_PATH':'/bundle','LD_LIBRARY_PATH_ORIG':'/original','DYLD_LIBRARY_PATH':'/bundle'}

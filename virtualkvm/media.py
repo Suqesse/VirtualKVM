@@ -548,9 +548,11 @@ class VideoSender(_FFmpegProcess):
         raise MediaError("Native capture is supported on Windows and macOS. Use synthetic=True for a headless Linux test.")
 
     def start(self, destination: str, port: int, passphrase: str, source: CaptureSource,
-              config: StreamConfig, synthetic: bool = False) -> None:
+              config: StreamConfig, synthetic: bool = False, *, transport: str = "srt") -> None:
         self.locator.check_ready()
-        url = _srt_url(destination, port, passphrase, config.latency_ms, "caller")
+        if transport not in ("srt", "tcp"):
+            raise ValueError("Unknown video transport")
+        url = "pipe:1" if transport == "tcp" else _srt_url(destination, port, passphrase, config.latency_ms, "caller")
         encoder = self._encoder(config, synthetic)
         capture = self._capture_args(source, config, synthetic)
         command = [self.locator.ffmpeg, "-hide_banner", "-loglevel", "warning", "-threads", "2",
@@ -586,7 +588,7 @@ class VideoSender(_FFmpegProcess):
             command += ["-realtime", "1", "-allow_sw", "0"]
         command += ["-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0",
                     "-muxpreload", "0", "-flush_packets", "1", url]
-        self._spawn(command, passphrase, subprocess.DEVNULL)
+        self._spawn(command, passphrase, subprocess.PIPE if transport == "tcp" else subprocess.DEVNULL)
         self.selected_encoder = encoder
         if encoder in {"libx264", "libx265"}:
             self._log(f"Using software encoder {encoder}; requested {config.fps} FPS is a target, not a performance guarantee")
@@ -604,13 +606,16 @@ class VideoReceiver(_FFmpegProcess):
         self._frames: queue.Queue[bytes] = queue.Queue(maxsize=1)
 
     def start(self, bind_address: str, port: int, passphrase: str, config: StreamConfig,
-              on_frame: Callable[[bytes, int, int], None]) -> None:
+              on_frame: Callable[[bytes, int, int], None], *, tcp_port: int | None = None) -> None:
         if not callable(on_frame):
             raise ValueError("on_frame must be callable")
         if config.audio:
             raise MediaError("Use AVReceiver for synchronized sound and video; the RGB receiver is video-only")
         self.locator.check_ready()
-        url = _srt_url(bind_address, port, passphrase, config.latency_ms, "listener")
+        if tcp_port is not None and (type(tcp_port) is not int or not 1 <= tcp_port <= 65535):
+            raise ValueError("Invalid local TCP media port")
+        url = (f"tcp://127.0.0.1:{tcp_port}?rw_timeout=20000000" if tcp_port is not None else
+               _srt_url(bind_address, port, passphrase, config.latency_ms, "listener"))
         command = [self.locator.ffmpeg, "-hide_banner", "-loglevel", "warning", "-threads", "2",
                    "-filter_threads", "2", "-probesize", "65536", "-analyzeduration", "100000",
                    "-flags", "low_delay", "-i", url, "-map", "0:v:0", "-an", "-sn", "-dn",
@@ -624,7 +629,7 @@ class VideoReceiver(_FFmpegProcess):
         self._thread(self._deliver_frames, process, config, on_frame, name="video-callback")
         deadline = time.monotonic() + 5
         try:
-            while not _process_listens_udp(process.pid, port):
+            while tcp_port is None and not _process_listens_udp(process.pid, port):
                 if process.poll() is not None:
                     raise MediaError(f"FFmpeg receiver failed to listen: {'; '.join(self.diagnostics[-5:])}")
                 if time.monotonic() >= deadline:
@@ -696,11 +701,14 @@ class AVReceiver(_FFmpegProcess):
         self.url: str | None = None
 
     def start(self, bind_address: str, port: int, passphrase: str, config: StreamConfig,
-              on_ready: Callable[[str], None]) -> None:
+              on_ready: Callable[[str], None], *, tcp_port: int | None = None) -> None:
         if not callable(on_ready):
             raise ValueError("on_ready must be callable")
         self.locator.check_ready()
-        input_url = _srt_url(bind_address, port, passphrase, config.latency_ms, "listener")
+        if tcp_port is not None and (type(tcp_port) is not int or not 1 <= tcp_port <= 65535):
+            raise ValueError("Invalid local TCP media port")
+        input_url = (f"tcp://127.0.0.1:{tcp_port}?rw_timeout=20000000" if tcp_port is not None else
+                     _srt_url(bind_address, port, passphrase, config.latency_ms, "listener"))
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
             reservation.bind(("127.0.0.1", 0))
             http_port = reservation.getsockname()[1]
@@ -717,7 +725,7 @@ class AVReceiver(_FFmpegProcess):
         self.url = output_url
         try:
             deadline = time.monotonic() + 5
-            while not _process_listens_udp(process.pid, port):
+            while tcp_port is None and not _process_listens_udp(process.pid, port):
                 if process.poll() is not None:
                     raise MediaError(f"FFmpeg A/V receiver failed to listen: {'; '.join(self.diagnostics[-5:])}")
                 if time.monotonic() >= deadline:

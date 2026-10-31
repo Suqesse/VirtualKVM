@@ -118,3 +118,19 @@ def connect_pinned(host: str, port: int, fingerprint: str, timeout: float = 5) -
     except BaseException:
         raw.close()
         raise
+
+
+def probe_fingerprint(host: str, port: int, timeout: float = 5) -> str:
+    """Read public identity only. Never send credentials or authorize this key.
+
+    The subsequent connection still pins this exact certificate and requires
+    owner approval with a TLS-bound short code. This probe is not a trust bypass.
+    """
+    import socket
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((host, port), timeout=timeout) as raw:
+        with context.wrap_socket(raw, server_hostname=host) as secured:
+            return certificate_fingerprint(secured.getpeercert(binary_form=True))

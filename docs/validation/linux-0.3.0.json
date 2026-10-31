@@ -1,0 +1,93 @@
+{
+  "created_utc": "2026-10-31T03:43:54.906035+00:00",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "python": "3.12.14",
+  "checks": [
+    {
+      "name": "doctor",
+      "exit_code": 0,
+      "seconds": 0.21,
+      "log": "build/validation/doctor.log",
+      "passed": true
+    },
+    {
+      "name": "interface",
+      "exit_code": 0,
+      "seconds": 0.47,
+      "log": "build/validation/interface.log",
+      "passed": true
+    },
+    {
+      "name": "discovery",
+      "exit_code": 0,
+      "seconds": 4.03,
+      "log": "build/validation/discovery.log",
+      "passed": true
+    },
+    {
+      "name": "tests",
+      "exit_code": 0,
+      "seconds": 48.33,
+      "log": "build/validation/tests.log",
+      "passed": true,
+      "executed_tests": 190,
+      "skipped_tests": 1
+    },
+    {
+      "name": "audio-video-smoke",
+      "exit_code": 0,
+      "seconds": 4.32,
+      "log": "build/validation/audio-video-smoke.log",
+      "passed": true
+    },
+    {
+      "name": "packaged-doctor",
+      "exit_code": 0,
+      "seconds": 0.31,
+      "log": "build/validation/packaged-doctor.log",
+      "passed": true
+    },
+    {
+      "name": "packaged-interface",
+      "exit_code": 0,
+      "seconds": 0.52,
+      "log": "build/validation/packaged-interface.log",
+      "passed": true
+    },
+    {
+      "name": "packaged-discovery",
+      "exit_code": 0,
+      "seconds": 4.08,
+      "log": "build/validation/packaged-discovery.log",
+      "passed": true
+    },
+    {
+      "name": "packaged-audio-video",
+      "exit_code": 0,
+      "seconds": 4.43,
+      "log": "build/validation/packaged-audio-video.log",
+      "passed": true
+    }
+  ],
+  "scope": "Synthetic encrypted integration, UI, input dry-run, shared files and muted Qt audio/video playback. Native hardware capture, sound output and display throughput are not measured.",
+  "sources": {
+    "virtualkvm/__init__.py": "a5bf9a13d5b9c20ee16d49e6c1cc10574c5bcaeedfc2f891938164ae8d06fe84",
+    "virtualkvm/__main__.py": "19fc2081a316ec0e84ad5c84ebd6389f5225ca4f38fe849e138d4777b1853500",
+    "virtualkvm/app.py": "5603a6a8d36a92b3aea2ffdd09375f7242c3ef1512cc01a46a9a166c4ec8a7cb",
+    "virtualkvm/control.py": "01c560edf260ed09026ac512a9bc1f29f3f06898e7cb49050bb09674ae3cf86c",
+    "virtualkvm/discovery.py": "b4a3a629ed7de9deace3416be75b0ec7eb183623141bc72093b3aab19ddb01b4",
+    "virtualkvm/display_gui.py": "fcb79e6e2461ef1b58be1d1cdfe5564846cb2d9fddd5d52a7d22a7fbbc2983b6",
+    "virtualkvm/display_layout.py": "af147ffb3f63a4f0a6ed7ae8296b8cac69663dea0e4357740085851230d46737",
+    "virtualkvm/gui.py": "cf2367ca65adb02d12785a0d9b57ccc204d0c7cd9ecb873402b657fec49ab3b3",
+    "virtualkvm/lan_gui.py": "7b58cab07861f1dceb22481ce27931c3e47820e0506a8e7ab80fdf1b42b36995",
+    "virtualkvm/media.py": "51209a348e70a52121681c5ad3e30a5ca132ba300425c3054ee6fd9fc17ed6c3",
+    "virtualkvm/native.py": "4ac25a25ef6cb78805d82b9c08d4bf1e3e79c9052b07ec2ca9ba63116ddbc9be",
+    "virtualkvm/pairing.py": "1bb272383b616401137bb78b412e9ebe9c2bb22347e35b3f66bd067c43b17dcb",
+    "virtualkvm/security.py": "193b015d005eb633c4a4a371a922f804af3130fb9827e41064bc6b627735b482",
+    "virtualkvm/shared.py": "5644dba48a5723cd5938adecdb6d86ab896fe35224cbc8ad9e2c1b57fd21a42b",
+    "virtualkvm/shared_gui.py": "f9bc4abfa1241096c1dc456e02503a362ad6be7232d999e86fa1b46711d7825c",
+    "virtualkvm/tcp_media.py": "367a6694b84dfde71c0a6cb9a4f5195d01e9838e9179a0e652ba3a189444e8bf",
+    "virtualkvm/transport.py": "933220735ee2e56df2d81dfa1762eedde8b613741024d5221f4710efbbff0489"
+  },
+  "passed": true
+}

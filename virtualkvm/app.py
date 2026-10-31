@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, fields, replace
 import ipaddress
+import hmac
 import os
+import re
 from pathlib import Path
 import secrets
 import socket
 import threading
 
-from .control import HostServer, ViewerClient
+from .control import HostServer, ViewerClient, _send_message
+from .security import SecurityError, pairing_proof
+from .tcp_media import InputBridge, OutputSlot
 from .media import AVReceiver, CaptureSource, StreamConfig, VideoReceiver, VideoSender
 from .native import NativeInput, list_displays
 from .display_layout import MAX_STREAMS, display_inventory
@@ -39,6 +43,7 @@ class HostController:
             self.displays = [asdict(d) for d in list_displays()]
         self._lock = threading.RLock()
         self._pending = []
+        self._tcp_slots = {}
         self.senders = []
         self._generation = 0
         self._worker = None
@@ -52,6 +57,7 @@ class HostController:
             on_stream_start=self._start_streams, on_stream_stop=self._stop_streams,
             shared_dir=shared_dir, shared_writable=shared_writable,
             allow_port_fallback=allow_port_fallback)
+        self.server.on_media_connection = self._media_connection
 
     @property
     def fingerprint(self):
@@ -65,6 +71,7 @@ class HostController:
 
     def stop(self):
         self._monitor_stop.set()
+        self._stop_streams()
         try:
             self.server.stop()
         finally:
@@ -104,7 +111,7 @@ class HostController:
         if not isinstance(options, dict):
             raise ValueError("Invalid stream configuration")
         allowed = {f.name for f in fields(StreamConfig)}
-        if set(options) - allowed - {"receiver_ports", "source_resolution", "preserve_aspect"}:
+        if set(options) - allowed - {"receiver_ports", "source_resolution", "preserve_aspect", "transport"}:
             raise ValueError("Unknown stream setting")
         config = StreamConfig(**{k: v for k, v in options.items() if k in allowed})
         source_resolution = options.get("source_resolution", False)
@@ -113,6 +120,9 @@ class HostController:
         preserve_aspect = options.get("preserve_aspect", False)
         if type(preserve_aspect) is not bool:
             raise ValueError("preserve_aspect must be a boolean")
+        transport = options.get("transport", "srt")
+        if transport not in ("tcp", "srt"):
+            raise ValueError("Unknown video transport")
         if config.audio and not self.synthetic and not self.audio_device:
             raise ValueError("Choose a host audio capture device before enabling sound")
         destination = str(ipaddress.ip_address(request["_peer_host"]))
@@ -147,7 +157,25 @@ class HostController:
         self._stop_streams()
         with self._lock:
             self._pending = pending
+            if transport == "tcp":
+                for stream in streams:
+                    ticket = secrets.token_hex(16)
+                    self._tcp_slots[ticket] = OutputSlot(stream["passphrase"])
+                    stream.update(transport="tcp", ticket=ticket)
         return {"streams": streams, "displays": self.displays}
+
+    def _media_connection(self, message, nonce, connection):
+        if not isinstance(message.get("ticket"), str) or not re.fullmatch(r"[0-9a-f]{32}", message["ticket"]):
+            raise SecurityError("Invalid media authorization")
+        with self._lock:
+            slot = self._tcp_slots.get(message.get("ticket"))
+            proof = message.get("proof")
+            if slot is None or not isinstance(proof, str) or not hmac.compare_digest(
+                    proof, pairing_proof(slot.key, nonce, self.fingerprint)):
+                raise SecurityError("Invalid media authorization")
+            slot.claim(connection)
+        _send_message(connection, {"type": "media_ready"}, threading.Lock())
+        slot.forward()
 
     def _start_streams(self):
         with self._lock:
@@ -166,7 +194,13 @@ class HostController:
                         if generation != self._generation:
                             return
                         self.senders.append(sender)
-                    sender.start(destination, port, key, source, config, synthetic=self.synthetic)
+                    with self._lock:
+                        slot = next((s for s in self._tcp_slots.values() if s.key == key), None)
+                    if slot is not None:
+                        sender.start(destination, port, key, source, config, synthetic=self.synthetic, transport="tcp")
+                        slot.start(sender)
+                    else:
+                        sender.start(destination, port, key, source, config, synthetic=self.synthetic)
                     with self._lock:
                         if generation != self._generation:
                             sender.stop()
@@ -175,8 +209,12 @@ class HostController:
                         self.on_status(line)
                 self.on_status("Video streams started")
             except Exception as error:
-                self.on_status(f"Video failed: {error}")
-                self._stop_streams()
+                try:
+                    message = f"Video failed: {error}"
+                    self.on_status(message)
+                    self.server.broadcast_status(message)
+                finally:
+                    self._stop_streams()
 
         self._worker = threading.Thread(target=start, name="virtualkvm-stream-start", daemon=True)
         self._worker.start()
@@ -186,7 +224,10 @@ class HostController:
         with self._lock:
             self._generation += 1
             senders, self.senders = self.senders, []
+            slots, self._tcp_slots = list(self._tcp_slots.values()), {}
             self._pending = []
+        for slot in slots:
+            slot.close()
         try:
             for sender in senders:
                 try:
@@ -221,9 +262,13 @@ class ViewerController:
                                    on_clipboard=on_clipboard, on_status=self._status)
         self.receivers = []
         self.displays = []
+        self.selected_displays = []
         self._input_geometry = {}
+        self.audio_displays = set()
         self._monitor_stop = threading.Event()
         self._monitor = None
+        self._tcp_bridges = []
+        self._cancelled = threading.Event()
 
     @property
     def connected(self):
@@ -239,7 +284,10 @@ class ViewerController:
             for receiver in list(self.receivers):
                 receiver.stop()
 
-    def connect(self, host, port, pin, fingerprint, displays=None, config=None):
+    def connect(self, host, port, pin, fingerprint, displays=None, config=None, *, approval=False,
+                name="Компьютер", control=True, on_pairing_code=None, confirm_pairing=None):
+        if self._cancelled.is_set():
+            raise OSError("Подключение отменено.")
         if self.connected or self.receivers:
             self.disconnect()
         indexes = list(displays if displays is not None else [0])
@@ -253,19 +301,36 @@ class ViewerController:
                 reservations.append(sock)
                 ports[str(index)] = sock.getsockname()[1]
             options["receiver_ports"] = ports
-            self.client.connect(host, port, pin, fingerprint)
+            extra = dict(approval=True, name=name, control=control, on_pairing_code=on_pairing_code,
+                         confirm_pairing=confirm_pairing) if approval else {}
+            self.client.connect(host, port, pin, fingerprint, **extra)
+            if self._cancelled.is_set():
+                raise OSError("Подключение отменено.")
+            if approval:
+                available = display_inventory(self.client.displays)
+                if not all(index in {display.index for display in available} for index in indexes):
+                    indexes = [available[0].index]
+                    options["receiver_ports"] = {str(indexes[0]): next(iter(ports.values()))}
+            if options.get("audio") and not self.client.permissions.audio:
+                options["audio"] = False
+                self.on_status("Владелец не разрешил звук. Подключаемся без аудио.")
             if len(indexes) > self.client.capabilities["max_streams"]:
                 raise ValueError("Хост поддерживает меньше экранов. Обновите приложение на хосте или сократите выбор.")
             if not self.client.capabilities["preserve_aspect"]:
                 options.pop("preserve_aspect", None)
+            if options.get("transport") == "tcp" and not self.client.capabilities.get("tcp_video"):
+                options.pop("transport")
+                self.on_status("На хосте старая версия: используется UDP/SRT. Для подключения без входящих UDP-портов обновите хост.")
             response = self.client.request_stream(indexes, options)
             self.displays = response.get("displays", [])
+            self.selected_displays = indexes
             for reservation in reservations:
                 reservation.close()
             reservations.clear()
             for stream in response["streams"]:
                 stream_config = StreamConfig(**stream["config"])
                 if stream_config.audio:
+                    self.audio_displays.add(stream["display"])
                     self._input_geometry[stream["display"]] = (
                         stream_config.width, stream_config.height,
                         stream_config.coded_width, stream_config.coded_height)
@@ -274,12 +339,18 @@ class ViewerController:
                 receiver = AVReceiver() if stream_config.audio else VideoReceiver()
                 self.receivers.append(receiver)
                 index = stream["display"]
+                tcp_port = None
+                if stream.get("transport") == "tcp":
+                    bridge = InputBridge(self.client.open_media(stream["ticket"], stream["passphrase"]))
+                    self._tcp_bridges.append(bridge)
+                    tcp_port = bridge.port
+                extra = {"tcp_port": tcp_port} if tcp_port is not None else {}
                 if stream_config.audio:
                     receiver.start("0.0.0.0", stream["port"], stream["passphrase"], stream_config,
-                        lambda url, i=index, c=stream_config: self.on_media(i, url, c.coded_width, c.coded_height))
+                        lambda url, i=index, c=stream_config: self.on_media(i, url, c.coded_width, c.coded_height), **extra)
                 else:
                     receiver.start("0.0.0.0", stream["port"], stream["passphrase"], stream_config,
-                        lambda rgb, width, height, i=index: self.on_frame(i, rgb, width, height))
+                        lambda rgb, width, height, i=index: self.on_frame(i, rgb, width, height), **extra)
             self.client.start_streams()
             self._monitor_stop = threading.Event()
             self._monitor = threading.Thread(target=self._monitor_media,
@@ -300,13 +371,26 @@ class ViewerController:
             except Exception:
                 pass
         self.client.disconnect()
+        bridges, self._tcp_bridges = self._tcp_bridges, []
+        for bridge in bridges:
+            bridge.stop()
         receivers, self.receivers = self.receivers, []
         self._input_geometry.clear()
+        self.audio_displays.clear()
         for receiver in receivers:
             receiver.stop()
 
+    def cancel_connect(self):
+        self._cancelled.set()
+        self.client.cancel_connect()
+
     def _monitor_media(self, stopped):
         while not stopped.wait(0.25):
+            failed_bridge = next((b for b in self._tcp_bridges if b.last_error), None)
+            if failed_bridge:
+                self.on_status(failed_bridge.last_error)
+                self.disconnect()
+                return
             failed = next((r for r in list(self.receivers) if not r.running), None)
             if failed:
                 self.on_status("Video failed: " + (failed.last_error or "Decoder process exited"))

@@ -15,7 +15,7 @@ import threading
 import time
 
 
-def smoke(fps=240, dual=True, audio=False):
+def smoke(fps=240, dual=True, audio=False, transport="srt"):
     from .app import HostController, ViewerController
     from .media import StreamConfig
     players, media_ready = [], queue.Queue()
@@ -54,8 +54,8 @@ def smoke(fps=240, dual=True, audio=False):
             host.start()
             viewer.connect("127.0.0.1", host.server.address[1], host.pin,
                 host.fingerprint, selected,
-                asdict(StreamConfig(width=320, height=180, fps=fps,
-                                    encoder="libx264", bitrate_mbps=4, audio=audio)))
+                dict(asdict(StreamConfig(width=320, height=180, fps=fps,
+                                    encoder="libx264", bitrate_mbps=4, audio=audio)), transport=transport))
             viewer.send_event({"type": "key", "key": "a", "down": True})
             viewer.send_event({"type": "key", "key": "a", "down": False})
             viewer.send_event({"type": "pointer", "x": 0.25, "y": 0.75, "display": selected[-1]})
@@ -106,7 +106,7 @@ def smoke(fps=240, dual=True, audio=False):
             if clipboard[-1] != "VirtualKVM → viewer" or host_clipboard[-1] != "VirtualKVM → host":
                 raise RuntimeError("Clipboard did not round-trip")
             return dict(passed=True, displays=len(selected), decoded_frames=dict(frames),
-                configured_fps=fps, resolution="320x180", input="validated dry-run",
+                configured_fps=fps, resolution="320x180", input="validated dry-run", transport=transport,
                 clipboard="bidirectional", file_bytes=payload.stat().st_size,
                 shared_folder="list, download, mkdir, upload verified",
                 audio="Qt shared-clock playback (muted check)" if audio else "disabled",
@@ -126,6 +126,29 @@ def smoke(fps=240, dual=True, audio=False):
                 event_loop = QEventLoop()
                 QTimer.singleShot(30, event_loop.quit)
                 event_loop.exec()
+
+
+def discovery_check():
+    """Exercise two real mDNS peers on loopback, including frozen extensions."""
+    from .discovery import DiscoveryService
+    first, second = [], []
+    kind = "_vkvm-check._tcp.local."
+    peers = [DiscoveryService(secrets.token_hex(16), name, ["127.0.0.1"], port, "00" * 32, callback,
+                              interfaces=["127.0.0.1"], service_type=kind)
+             for name, port, callback in (("Check A", 41001, first.append), ("Check B", 41002, second.append))]
+    try:
+        for peer in peers:
+            peer.start()
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if first and second and any(d.identifier == peers[1].identifier for d in first[-1]) and any(
+                    d.identifier == peers[0].identifier for d in second[-1]):
+                return {"mdns_loopback": True, "two_peers": True, "secrets_advertised": False}
+            time.sleep(0.03)
+        raise RuntimeError("mDNS peers did not discover one another on loopback")
+    finally:
+        for peer in peers:
+            peer.stop()
 
 
 def ui_check():
@@ -165,10 +188,12 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("doctor", help="Check FFmpeg/SRT, native input and capture permissions")
     commands.add_parser("ui-check", help="Render and close the interface using temporary settings")
+    commands.add_parser("discovery-check", help="Verify two mDNS peers on loopback without sharing screens")
     check = commands.add_parser("smoke", help="Run real encrypted synthetic end-to-end check")
     check.add_argument("--fps", type=int, default=240)
     check.add_argument("--single", action="store_true")
     check.add_argument("--audio", action="store_true", help="Also verify synchronized Qt audio/video playback (muted)")
+    check.add_argument("--transport", choices=("tcp", "srt"), default="tcp")
     server = commands.add_parser("host", help="Start a headless host")
     server.add_argument("--bind", default="0.0.0.0")
     server.add_argument("--port", type=int, default=24800)
@@ -180,19 +205,24 @@ def main(argv=None):
     server.add_argument("--share-write", action="store_true", help="Allow uploads and directory creation in the chosen shared folder")
     args = parser.parse_args(argv)
     try:
+        if args.command == "discovery-check":
+            print(json.dumps(discovery_check(), indent=2))
+            return 0
         if args.command == "ui-check":
             print(json.dumps(ui_check(), indent=2))
             return 0
         if args.command == "doctor":
+            import zeroconf
             from .media import FFmpegLocator
             from .native import NativeInput, list_displays
             report = {"media": FFmpegLocator().check_ready(),
+                      "discovery": {"backend": "Bonjour/mDNS", "library_loaded": bool(zeroconf.Zeroconf)},
                       "permissions": NativeInput().permission_status(),
                       "displays": [asdict(d) for d in list_displays()]}
             print(json.dumps(report, indent=2))
             return 0
         if args.command == "smoke":
-            print(json.dumps(smoke(args.fps, not args.single, args.audio), indent=2))
+            print(json.dumps(smoke(args.fps, not args.single, args.audio, args.transport), indent=2))
             return 0
         if args.command == "host":
             from .app import HostController

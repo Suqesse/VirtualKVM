@@ -1,6 +1,6 @@
 # Architecture
 
-VirtualKVM 0.2.0 is a pilot application that separates the desktop control plane from media transport. Python coordinates platform APIs, networking, and the PySide6 interface; FFmpeg supplies native capture, H.264/HEVC encoding, AAC, SRT, decoding, and remuxing. The application does not implement a display driver.
+VirtualKVM 0.3.0 is a pilot application that separates the desktop control plane from media transport. Python coordinates platform APIs, networking, and the PySide6 interface; FFmpeg supplies native capture, H.264/HEVC encoding, AAC, SRT, decoding, and remuxing. The application does not implement a display driver.
 
 ## Components
 
@@ -9,6 +9,9 @@ VirtualKVM 0.2.0 is a pilot application that separates the desktop control plane
 | `app.py` | Host/viewer lifecycle, stream negotiation, receiver ports, native input, cleanup |
 | `control.py` | Framed TLS messages, authenticated sessions, events, clipboard, files, shared-folder browser, stream RPC |
 | `transport.py` | Serialized nonblocking TLS operations, independent caller deadlines and interruptible shutdown |
+| `discovery.py` | Bonjour/mDNS peers, validated public advertisements, stable device IDs and explicit identity trust store |
+| `pairing.py`, `lan_gui.py` | TLS-bound short codes, bilateral first-connection confirmation and owner-selected permissions |
+| `tcp_media.py` | Single-use media slots and loopback-only FFmpeg adapters for outgoing TLS video channels |
 | `security.py` | Persisted host certificate, SHA-256 certificate fingerprint, pairing proof |
 | `media.py` | FFmpeg discovery, audio/video capture, encrypted SRT sender, RGB receiver and timestamp-preserving A/V relay |
 | `native.py` | Display enumeration, Windows/macOS input injection, release of held input, platform permissions |
@@ -19,7 +22,23 @@ VirtualKVM 0.2.0 is a pilot application that separates the desktop control plane
 
 The GUI forwards worker-thread callbacks through Qt-safe mechanisms. Video-only RGB frames use a bounded latest-frame path, so a slow display cannot create an unbounded backlog. Deliberately dropping stale presentation frames is separate from corrupting encoded video or silently duplicating frames in an integrity check. When audio is enabled, a QtMultimedia player consumes the timestamped muxed A/V stream instead of independently scheduling audio alongside RGB callbacks.
 
-## Connection and streams
+## Local discovery and consent
+
+The normal GUI starts a listener and Bonjour/mDNS discovery when opened. Capture and input require an authenticated, approved session. Advertisements contain a stable random device ID, human computer name, IPv4 addresses, actual listener port and public certificate fingerprint; they contain no PIN. Same-subnet addresses are preferred over unrelated VPN addresses. Discovery is untrusted input and does not automatically establish trust.
+
+Quick pairing uses protocol-v1 optional capabilities and `request_access` instead of a typed PIN. A 12-hex-character short authentication string is derived from the TLS `tls-unique` channel binding, fresh server nonce and certificate fingerprint, with an application-specific transcript label. A peer impersonating the advertisement cannot simply forward the same code across two terminated TLS sessions. On first use or key replacement, the viewer confirms the displayed code; the owner separately confirms the matching code and grants per-session input, clipboard, files and audio permissions. With a previously verified, unchanged certificate, the viewer need not repeat first-use confirmation. Owner approval remains required.
+
+Only the confirmed certificate is remembered; secrets and consent are not stored. Changed certificates require a warning and fresh comparison. Requests expire after 60 seconds, are cancellable, and only one pending approval is allowed per host. Permission enforcement lives on the host for every relevant request, beyond disabled GUI buttons. View-only peers cannot inject input; release-all remains safe to send during cleanup.
+
+## Default TCP video
+
+The GUI uses outgoing pinned-TLS media connections to the same host listener as control. Each selected stream receives an independent random ticket/key after control authorization. A second TLS handshake proves the stream key against a fresh challenge and exact host identity; tickets are consumed once and revoked with their owning stream generation. Video sockets cannot authorize control or reuse stale tickets.
+
+FFmpeg writes encoded MPEG-TS to a pipe on the host. A bounded forwarding worker sends it over the dedicated TLS channel. On the viewer, a loopback TCP adapter feeds the existing FFmpeg RGB decoder or timestamp-preserving A/V relay. This avoids inbound client UDP ports and avoids placing control traffic behind a video queue. There is no public TCP-to-arbitrary-destination proxy. Legacy AES/SRT remains selectable and is retained for older hosts.
+
+Video windows open once negotiation succeeds, before any frame arrives, and show a waiting state. A separate 20-second first-frame deadline produces a visible diagnostic and cleanup. Encoder/capture startup errors are sent to the viewer. Hidden primary A/V windows keep consuming their relay so other screens survive; stale presentation frames remain bounded.
+
+## Legacy SRT connection (optional)
 
 ```mermaid
 sequenceDiagram
@@ -40,7 +59,7 @@ sequenceDiagram
     V->>C: Input events / optional clipboard / explicit file transfer
 ```
 
-The host derives the video destination from the authenticated control peer rather than trusting an arbitrary destination supplied by a message. Each display has its own stream and encryption key. Control is carried on TCP, default port 24800; video uses negotiated UDP ports at the viewer.
+The host derives the video destination from the authenticated control peer rather than trusting an arbitrary destination supplied by a message. In SRT mode each display has its own stream and AES key. Control is carried on TCP, default port 24800; SRT video uses negotiated UDP ports at the viewer. The default TCP mode uses only the host listener for LAN traffic, with an independent authenticated TLS socket per screen.
 
 Only an authenticated controlling session may inject input or negotiate streams. Replacing or losing that session tears down its streams and releases held input. Focus loss and the emergency shortcut also request input release. Network-loss handling must be bounded by the protocol's heartbeat/disconnect handling, not by waiting indefinitely for a user action.
 
@@ -88,7 +107,7 @@ GUI profiles are Gaming (1920×1080/240 FPS, 45 Mbit/s, 30 ms SRT), Office (1920
 
 The preferred target is **240 FPS**. At this rate one frame lasts approximately 4.17 ms. Resolution, number of monitors, encoder limits, buffering, network capacity, decoding, and physical display refresh all constrain the attainable result. A configured or probed 240 FPS stream does not establish a 240 FPS physical capture/display pipeline.
 
-The synthetic tests exercise software encoding, encrypted transport, decoding, and integrity under controlled conditions. TLS, pairing, input event routing, clipboard, files, disconnect cleanup, and invalid requests are tested separately. Native Windows/macOS behavior and sustained dual-monitor throughput require tests on actual target machines.
+The synthetic tests exercise both TLS/TCP and AES/SRT, owner approval, code matching, permission denial, single-use tickets, software encoding, decoding and integrity under controlled conditions. TLS, pairing, input event routing, clipboard, files, disconnect cleanup, and invalid requests are tested separately. Native Windows/macOS behavior and sustained dual-monitor throughput require tests on actual target machines.
 
 Hardware encoders are selected only when usable; a listed FFmpeg encoder may still fail when its driver or device is unavailable. Software fallback must be visible. No automatic benchmark result should be presented as a claim of dual 4K/240 FPS or a measured end-to-end latency unless that exact path was measured.
 
@@ -99,3 +118,5 @@ Hardware encoders are selected only when usable; a listed FFmpeg encoder may sti
 Application MIT text, a dependency notice, and available installed dependency license files are included under `licenses/` in bundled resources. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). CI is configured to run checks, build and upload platform artifacts; whether a particular remote run succeeded must be established from that run, not inferred from the workflow file.
 
 The complete test matrix, including hardware-only checks, is in [TESTING.md](TESTING.md).
+
+Design references and the deliberately deferred Internet scope are recorded in [REMOTE_DESIGN.md](REMOTE_DESIGN.md).

@@ -7,4 +7,6 @@ pycparser==3.12
 PySide6-Essentials==6.11.3
 PySide6-Addons==6.11.3
 shiboken6==6.11.3
+zeroconf==0.148.0
+ifaddr==0.2.0
 pyobjc-framework-Quartz>=10; sys_platform == "darwin"

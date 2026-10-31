@@ -125,6 +125,11 @@ class TLSConnection:
         with self._io_lock:
             return self._raw.fileno()
 
+    def channel_binding(self):
+        with self._io_lock:
+            self._ensure_open()
+            return self._raw.get_channel_binding("tls-unique")
+
     def shutdown(self, how=socket.SHUT_RDWR):
         self._stopped.set()
         with self._io_lock:

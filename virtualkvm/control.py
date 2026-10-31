@@ -25,6 +25,7 @@ from .security import SecurityError, connect_pinned, pairing_proof, server_ident
 from .shared import SharedDirectory, SharedRead, SharedUpload
 from .transport import TLSConnection
 from .display_layout import MAX_STREAMS
+from .pairing import AccessRequest, LEGACY_PERMISSIONS, Permissions, session_code
 
 MAX_MESSAGE = 1024 * 1024
 MAX_FILE_SIZE = 1024 * 1024 * 1024
@@ -165,6 +166,8 @@ class _Session:
         self.peer = peer
         self.lock = threading.Lock()
         self.transfer: _Transfer | SharedRead | SharedUpload | None = None
+        self.permissions = LEGACY_PERMISSIONS
+        self.name = ""
 
     def send(self, message: dict):
         _send_message(self.connection, message, self.lock)
@@ -187,6 +190,9 @@ class HostServer:
         self.on_event, self.on_clipboard = on_event, on_clipboard
         self.on_status, self.on_disconnect = on_status, on_disconnect
         self.on_stream_request, self.on_stream_start, self.on_stream_stop = on_stream_request, on_stream_start, on_stream_stop
+        self.on_media_connection = None
+        self.on_access_request = None
+        self._approval_requests = set()
         self.displays = displays or []
         self._context, self.fingerprint = server_identity(self.state_dir)
         self._listener: socket.socket | None = None
@@ -205,7 +211,8 @@ class HostServer:
     @property
     def sessions(self):
         with self._lock:
-            return [{"host": self._session.peer[0], "port": self._session.peer[1]}] if self._session else []
+            return [{"host": self._session.peer[0], "port": self._session.peer[1],
+                     "name": self._session.name, "permissions": self._session.permissions.encode()}] if self._session else []
 
     def start(self):
         if self._listener:
@@ -237,6 +244,13 @@ class HostServer:
         self._accept_thread.start()
         _notify(self.on_status, "Host listening")
 
+    def disconnect_viewer(self):
+        with self._lock:
+            session = self._session
+        if session:
+            _notify(self.on_event, {"type": "release_all"})
+            _shutdown(session.connection)
+
     def stop(self):
         self._stopping.set()
         listener, self._listener = self._listener, None
@@ -244,6 +258,9 @@ class HostServer:
             _shutdown(listener)
         with self._lock:
             connections = list(self._connections)
+            requests = list(self._approval_requests)
+        for request in requests:
+            request.resolve()
         for connection in connections:
             _shutdown(connection)
         current = threading.current_thread()
@@ -265,7 +282,7 @@ class HostServer:
             except OSError:
                 break
             with self._lock:
-                if len(self._connections) >= 8:
+                if len(self._connections) >= MAX_STREAMS + 8:
                     connection.close()
                     continue
                 self._connections.add(connection)
@@ -334,29 +351,79 @@ class HostServer:
                 if len(attempts) >= 5:
                     raise SecurityError("Too many pairing attempts; wait five minutes")
             nonce = secrets.token_hex(32)
-            session.send({"type": "challenge", "version": 1, "nonce": nonce})
+            session.send({"type": "challenge", "version": 1, "nonce": nonce,
+                          "quick_pairing": self.on_access_request is not None})
             authentication = _receive_message(connection)
-            expected = pairing_proof(self.pin, nonce, self.fingerprint)
-            proof = authentication.get("proof")
-            if authentication.get("type") != "authenticate" or not isinstance(proof, str) or not hmac.compare_digest(proof, expected):
+            if authentication.get("type") == "authenticate_media":
+                if self.on_media_connection is None:
+                    raise SecurityError("TCP video is not available")
+                self.on_media_connection(authentication, nonce, connection)
+                return
+            if authentication.get("type") == "request_access":
+                if self.on_access_request is None:
+                    raise SecurityError("Quick pairing is disabled")
+                request = AccessRequest(authentication.get("name"), session_code(connection, nonce, self.fingerprint),
+                                        authentication.get("control", True))
                 with self._lock:
+                    if self._session is not None or self._approval_requests:
+                        session.send({"type": "error", "error": "На хосте уже есть активный запрос или подключение."})
+                        return
+                    self._approval_requests.add(request)
+                try:
+                    session.send({"type": "awaiting_approval"})
+                    _notify(self.on_access_request, request)
+                    def alive():
+                        try:
+                            if not select.select([connection], [], [], 0)[0]:
+                                return True
+                            previous = connection.gettimeout()
+                            connection.settimeout(0.05)
+                            try:
+                                # No client data is valid while waiting for approval.
+                                connection.recv(1)
+                                return False
+                            except TimeoutError:
+                                return True
+                            finally:
+                                connection.settimeout(previous)
+                        except (OSError, ValueError):
+                            return False
+                    grant = request.wait(self._stopping, alive)
+                finally:
+                    with self._lock:
+                        self._approval_requests.discard(request)
+                if grant is None:
                     attempts.append(time.monotonic())
-                session.send({"type": "error", "error": "Pairing failed"})
-                raise SecurityError("Pairing failed")
+                    session.send({"type": "error", "error": "Владелец отклонил запрос или время подтверждения истекло."})
+                    return
+                session.permissions, session.name = grant, request.name
+            else:
+                expected = pairing_proof(self.pin, nonce, self.fingerprint)
+                proof = authentication.get("proof")
+                if authentication.get("type") != "authenticate" or not isinstance(proof, str) or not hmac.compare_digest(proof, expected):
+                    with self._lock:
+                        attempts.append(time.monotonic())
+                    session.send({"type": "error", "error": "Pairing failed"})
+                    raise SecurityError("Pairing failed")
             with self._lock:
                 if self._session is not None:
                     session.send({"type": "error", "error": "Another viewer already controls this host"})
                     return
                 self._session = session
             session.send({"type": "authenticated", "version": 1, "displays": self.displays,
-                          "shared": self.shared.info,
-                          "capabilities": {"max_streams": MAX_STREAMS, "preserve_aspect": True}})
+                          "shared": self.shared.info if session.permissions.files else {"enabled": False, "writable": False, "name": ""},
+                          "permissions": session.permissions.encode(),
+                          "capabilities": {"max_streams": MAX_STREAMS, "preserve_aspect": True,
+                                           "tcp_video": self.on_media_connection is not None}})
             # An unresponsive peer must release remote keys within a bounded
             # interval, including cable loss where TCP has not reported EOF.
-            connection.settimeout(10)
+            first_approved_request = authentication.get("type") == "request_access"
+            connection.settimeout(70 if first_approved_request else 10)
             _notify(self.on_status, "Viewer connected")
             while not self._stopping.is_set():
-                message = _receive_message(connection)
+                message = _receive_message(connection, timeout=70 if first_approved_request else 10)
+                first_approved_request = False
+                connection.settimeout(10)
                 try:
                     result = self._handle(session, message)
                     if "id" in message:
@@ -391,6 +458,14 @@ class HostServer:
 
     def _handle(self, session: _Session, message: dict):
         kind = message["type"]
+        if kind == "event" and not session.permissions.control:
+            event = message.get("event")
+            if not isinstance(event, dict) or event.get("type") != "release_all":
+                raise ProtocolError("Владелец разрешил только просмотр экрана.")
+        if kind == "clipboard" and not session.permissions.clipboard:
+            raise ProtocolError("Буфер обмена не разрешён владельцем.")
+        if kind.startswith(("file_", "shared_")) and not session.permissions.files:
+            raise ProtocolError("Передача файлов не разрешена владельцем.")
         if kind == "event":
             event = message.get("event")
             if not isinstance(event, dict):
@@ -406,6 +481,8 @@ class HostServer:
                 raise ProtocolError("Choose one to eight distinct display indexes")
             if not isinstance(config, dict):
                 raise ProtocolError("Invalid stream configuration")
+            if config.get("audio") and not session.permissions.audio:
+                raise ProtocolError("Передача звука не разрешена владельцем.")
             if not self.on_stream_request:
                 raise ProtocolError("Video streaming is not configured")
             request = {"type": kind, "displays": displays, "config": config, "_peer_host": session.peer[0]}
@@ -500,6 +577,8 @@ class HostServer:
         text = _clipboard(text)
         with self._lock:
             session = self._session
+        if session and not session.permissions.clipboard:
+            return
         if session:
             session.send({"type": "clipboard", "text": text})
 
@@ -527,6 +606,9 @@ class ViewerClient:
         self.displays = []
         self.shared_info = {"enabled": False, "writable": False, "name": ""}
         self.capabilities = {"max_streams": 2, "preserve_aspect": False}
+        self._peer = None
+        self._opening = None
+        self.permissions = LEGACY_PERMISSIONS
         self._transfer_lock = threading.Lock()
         self._connection: ssl.SSLSocket | None = None
         self._send_lock = threading.Lock()
@@ -540,21 +622,39 @@ class ViewerClient:
     def connected(self):
         return self._connection is not None
 
-    def connect(self, host, port=24800, pin=None, fingerprint=None):
+    def connect(self, host, port=24800, pin=None, fingerprint=None, *, approval=False, name="Компьютер", control=True,
+                on_pairing_code=None, confirm_pairing=None):
         if self._connection:
             raise RuntimeError("Viewer is already connected")
         connection = TLSConnection(connect_pinned(host, port, fingerprint))
+        with self._lock:
+            self._opening = connection
         connection.settimeout(5)
         try:
             challenge = _receive_message(connection)
             if challenge.get("type") != "challenge" or challenge.get("version") != 1:
                 raise ProtocolError(challenge.get("error", "Unsupported host protocol"))
-            proof = pairing_proof(pin, challenge.get("nonce"), fingerprint)
-            _send_message(connection, {"type": "authenticate", "proof": proof}, self._send_lock)
-            response = _receive_message(connection)
+            if approval:
+                if challenge.get("quick_pairing") is not True:
+                    raise ProtocolError("На хосте выключено быстрое подключение. Включите поиск или обновите приложение.")
+                code = session_code(connection, challenge.get("nonce"), fingerprint)
+                _notify(on_pairing_code, code)
+                _send_message(connection, {"type": "request_access", "name": name, "control": control}, self._send_lock)
+                connection.settimeout(65)
+                if confirm_pairing is not None and confirm_pairing(code) is not True:
+                    raise SecurityError("Сверка кода отменена.")
+                response = _receive_message(connection, timeout=65)
+                if response.get("type") == "awaiting_approval":
+                    _notify(self.on_status, "Подтвердите подключение на другом компьютере и сверьте короткий код сеанса.")
+                    response = _receive_message(connection, timeout=65)
+            else:
+                proof = pairing_proof(pin, challenge.get("nonce"), fingerprint)
+                _send_message(connection, {"type": "authenticate", "proof": proof}, self._send_lock)
+                response = _receive_message(connection)
             if response.get("type") != "authenticated" or response.get("version") != 1:
                 raise SecurityError(response.get("error", "Pairing failed"))
             self.displays = response.get("displays", [])
+            self.permissions = Permissions.parse(response["permissions"]) if "permissions" in response else LEGACY_PERMISSIONS
             capabilities = response.get("capabilities", {})
             if not isinstance(capabilities, dict):
                 raise ProtocolError("Invalid host capabilities")
@@ -562,7 +662,9 @@ class ViewerClient:
             if type(maximum) is not int or not 1 <= maximum <= MAX_STREAMS:
                 raise ProtocolError("Invalid host display limit")
             self.capabilities = {"max_streams": maximum,
-                                 "preserve_aspect": capabilities.get("preserve_aspect") is True}
+                                 "preserve_aspect": capabilities.get("preserve_aspect") is True,
+                                 "tcp_video": capabilities.get("tcp_video") is True}
+            self._peer = (host, port, fingerprint)
             self.shared_info = response.get("shared", {"enabled": False, "writable": False, "name": ""})
             connection.settimeout(10)
             self._connection = connection
@@ -577,6 +679,16 @@ class ViewerClient:
         except BaseException:
             _shutdown(connection)
             raise
+        finally:
+            with self._lock:
+                if self._opening is connection:
+                    self._opening = None
+
+    def cancel_connect(self):
+        with self._lock:
+            connection = self._opening
+        if connection:
+            _shutdown(connection)
 
     def disconnect(self):
         self._heartbeat_stop.set()
@@ -667,6 +779,26 @@ class ViewerClient:
         if not isinstance(event, dict):
             raise ProtocolError("Invalid input event")
         self._send({"type": "event", "event": event})
+
+    def open_media(self, ticket, key):
+        if not self.connected or self._peer is None:
+            raise ProtocolError("Connect to the host before opening video")
+        if not isinstance(ticket, str) or not re.fullmatch(r"[0-9a-f]{32}", ticket):
+            raise ProtocolError("Invalid media ticket")
+        host, port, fingerprint = self._peer
+        connection = TLSConnection(connect_pinned(host, port, fingerprint))
+        try:
+            challenge = _receive_message(connection)
+            proof = pairing_proof(key, challenge.get("nonce"), fingerprint)
+            _send_message(connection, {"type": "authenticate_media", "ticket": ticket, "proof": proof}, threading.Lock())
+            response = _receive_message(connection)
+            if response.get("type") != "media_ready":
+                raise ProtocolError("The host refused the video channel")
+            connection.settimeout(None)
+            return connection
+        except BaseException:
+            _shutdown(connection)
+            raise
 
     def send_clipboard(self, text):
         self._send({"type": "clipboard", "text": _clipboard(text)})

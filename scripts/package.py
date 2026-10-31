@@ -32,7 +32,7 @@ def prepare_notices(root: Path, packaging_dir: Path) -> Path:
     for source in (root / "docs" / "licenses").glob("*.txt"):
         shutil.copy2(source, notices / source.name)
     distributions = ("PySide6-Essentials", "PySide6-Addons", "shiboken6", "cryptography",
-                     "cffi", "pycparser", "pyobjc-core", "pyobjc-framework-Cocoa",
+                     "cffi", "pycparser", "zeroconf", "ifaddr", "pyobjc-core", "pyobjc-framework-Cocoa",
                      "pyobjc-framework-Quartz", "pyinstaller")
     for name in distributions:
         try:
@@ -75,6 +75,8 @@ def configure_macos_privacy(spec: Path, version: str = "0.1.0") -> None:
         "CFBundleName": "VirtualKVM",
         "CFBundleDisplayName": "VirtualKVM",
         "NSHighResolutionCapable": True,
+        "NSLocalNetworkUsageDescription": "VirtualKVM discovers computers on your local network and connects only after you approve a session.",
+        "NSBonjourServices": ["_virtualkvm._tcp", "_vkvm-check._tcp"],
         "NSMicrophoneUsageDescription": "VirtualKVM streams your selected audio input to your paired computer over an encrypted LAN connection.",
         "NSScreenCaptureUsageDescription": "VirtualKVM streams your selected displays to your paired computer over an encrypted LAN connection.",
         "NSInputMonitoringUsageDescription": "VirtualKVM handles keyboard and mouse input when you explicitly enable remote control.",
@@ -119,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         specification_options = [
             "--name", "VirtualKVM", "--paths", str(root),
             "--collect-all", "virtualkvm", "--add-data", f"{notices}:licenses",
+            "--collect-all", "zeroconf",
             "--specpath", str(packaging_dir),
             "--console" if args.console else "--windowed",
         ]

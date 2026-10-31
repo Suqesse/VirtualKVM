@@ -11,6 +11,8 @@ VirtualKVM application code is MIT-licensed; see `LICENSE` in the source tree or
 | OpenSSL used by Python / cryptography | Current OpenSSL releases use Apache License 2.0; use the notices for the particular runtime build. cryptography wheels may contain their own OpenSSL rather than the system copy. |
 | cffi | MIT; [cffi.readthedocs.io](https://cffi.readthedocs.io/) |
 | pycparser | BSD 3-Clause; [github.com/eliben/pycparser](https://github.com/eliben/pycparser) |
+| zeroconf | LGPL 2.1 or later; Bonjour/mDNS discovery; [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf). Its license and dynamic extension are included with the application. |
+| ifaddr | MIT; local interface enumeration used by zeroconf; [github.com/p-staven/ifaddr](https://github.com/p-staven/ifaddr) |
 | PyObjC core, Cocoa and Quartz bridges on macOS | MIT; [pyobjc.readthedocs.io](https://pyobjc.readthedocs.io/) |
 | PyInstaller bootloader | GPL with a bootloader exception permitting distribution of applications using the bootloader; see its supplied license and exception. The build tool is not an application runtime API. |
 

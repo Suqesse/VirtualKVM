@@ -52,6 +52,7 @@ def check_windows(installer, staging):
             raise RuntimeError("Installed executable missing")
         run([str(binary), "doctor"], env=environment)
         run([str(binary), "ui-check"], env=environment)
+        run([str(binary), "discovery-check"], env=environment)
         run([str(binary), "smoke", "--fps", "240", "--audio"], env=environment)
         run(install)  # Upgrade using the same application ID and directory.
         if sentinel.read_text() != "preserve-user-state":
@@ -69,7 +70,7 @@ def check_windows(installer, staging):
         time.sleep(0.2)
     if binary.exists():
         raise RuntimeError("Uninstaller left the application executable behind")
-    return {"install": True, "offline_media": True, "interface": True, "upgrade": True, "uninstall": True, "user_state_preserved": True}
+    return {"install": True, "offline_media": True, "interface": True, "lan_discovery": True, "upgrade": True, "uninstall": True, "user_state_preserved": True}
 
 
 def check_macos(package, image):
@@ -93,6 +94,7 @@ def check_macos(package, image):
         binary = app / "Contents/MacOS" / info["CFBundleExecutable"]
         run([str(binary), "doctor"], env=environment)
         run([str(binary), "ui-check"], env=environment)
+        run([str(binary), "discovery-check"], env=environment)
         run([str(binary), "smoke", "--fps", "240", "--audio"], env=environment)
         run(["/usr/bin/sudo", "/usr/sbin/installer", "-pkg", str(package), "-target", "/"])
         run([str(binary), "doctor"], env=environment)
@@ -115,7 +117,7 @@ def check_macos(package, image):
         if not sentinel.is_file():
             raise RuntimeError("Installer lifecycle changed user state")
         sentinel.unlink()
-    return {"install": True, "offline_media": True, "interface": True, "upgrade": True, "dmg_verified": True, "dmg_layout": True, "user_state_preserved": True}
+    return {"install": True, "offline_media": True, "interface": True, "lan_discovery": True, "upgrade": True, "dmg_verified": True, "dmg_layout": True, "user_state_preserved": True}
 
 
 def main(argv=None):
