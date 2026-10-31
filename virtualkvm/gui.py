@@ -642,6 +642,10 @@ class MainWindow(QMainWindow):
         form.addRow("Интерфейс", self.host_bind)
         form.addRow("Порт", self.host_port)
         form.addRow("PIN", self.host_pin)
+        self.host_pin_hint = QLabel()
+        self.host_pin_hint.setWordWrap(True)
+        self.host_pin_hint.setObjectName("validationError")
+        form.addRow(self.host_pin_hint)
         self.new_pin = QPushButton("Новый PIN")
         self.new_pin.clicked.connect(lambda: self.host_pin.setText(secrets.token_urlsafe(9)))
         form.addRow("", self.new_pin)
@@ -693,6 +697,7 @@ class MainWindow(QMainWindow):
         self.host_stop.setEnabled(False)
         self.host_start.clicked.connect(self._start_host)
         self.host_stop.clicked.connect(self._stop_host)
+        self.host_pin.textChanged.connect(self._validate_host_pin)
         buttons.addWidget(self.host_start)
         buttons.addWidget(self.host_stop)
         buttons.addStretch()
@@ -1155,7 +1160,8 @@ class MainWindow(QMainWindow):
                 on_clipboard=lambda text: _emit(self._bridge.clipboard, str(text)),
                 audio_device=self._audio_device_value(),
                 shared_dir=Path(self.shared_path.text()) if self.share_enabled.isChecked() else None,
-                shared_writable=self.shared_writable.isChecked() if self.share_enabled.isChecked() else False)
+                shared_writable=self.shared_writable.isChecked() if self.share_enabled.isChecked() else False,
+                allow_port_fallback=True)
         except Exception as error:
             self._status(f"Не удалось создать хост: {error}")
             return
@@ -1170,6 +1176,12 @@ class MainWindow(QMainWindow):
                       self.host_audio_device, self.audio_refresh, self.share_enabled, self.shared_choose,
                       self.shared_writable, self.host_display_refresh):
             field.setEnabled(enabled)
+
+    def _validate_host_pin(self, *args):
+        valid = len(self.host_pin.text()) >= 8
+        self.host_pin_hint.setText("" if valid else "Минимум 8 символов. Кнопка «Новый PIN» создаёт подходящий код.")
+        if self._host is None and not self._closing:
+            self.host_start.setEnabled(valid)
 
     def _stop_host(self) -> None:
         if self._host is None:
@@ -1260,6 +1272,7 @@ class MainWindow(QMainWindow):
             if kind == "host-start" and error is None:
                 self._host_running = True
                 self.host_stop.setEnabled(True)
+                self.host_port.setValue(owner.server.address[1])
                 self.host_fingerprint.setText(str(owner.fingerprint))
                 self._show_host_displays(owner.displays)
                 self.connection_badge.setText("●  Хост доступен")

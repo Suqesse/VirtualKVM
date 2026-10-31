@@ -24,7 +24,7 @@ def default_state_dir() -> Path:
 class HostController:
     def __init__(self, state_dir=None, bind="0.0.0.0", port=24800, pin=None,
                  synthetic=False, on_status=None, on_clipboard=None, receive_dir=None,
-                 audio_device="", shared_dir=None, shared_writable=False):
+                 audio_device="", shared_dir=None, shared_writable=False, allow_port_fallback=False):
         self.state_dir = Path(state_dir or default_state_dir())
         self.synthetic = synthetic
         self.audio_device = audio_device
@@ -50,7 +50,8 @@ class HostController:
             on_status=self.on_status, on_disconnect=self._stop_streams,
             displays=self.displays, on_stream_request=self._prepare_streams,
             on_stream_start=self._start_streams, on_stream_stop=self._stop_streams,
-            shared_dir=shared_dir, shared_writable=shared_writable)
+            shared_dir=shared_dir, shared_writable=shared_writable,
+            allow_port_fallback=allow_port_fallback)
 
     @property
     def fingerprint(self):

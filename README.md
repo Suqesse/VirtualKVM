@@ -38,7 +38,7 @@
 | **Удобство** | Русский интерфейс, текстовый буфер обмена по выбору пользователя, сохранение профиля без PIN и ключей. |
 | **Защита** | TLS с проверкой сертификата и PIN, зашифрованное SRT-видео, проверка SHA-256 при передаче файлов. |
 
-**Статус: пилотная версия 0.2.0.** Цель — 240 FPS; фактическая частота зависит от захвата, разрешения, кодера, сети и мониторов. Поддержка параметра 240 FPS не означает подтверждённые два экрана 4K/240 FPS. [Что проверено →](docs/TESTING.md)
+**Статус: пилотная версия 0.2.1.** Цель — 240 FPS; фактическая частота зависит от захвата, разрешения, кодера, сети и мониторов. Поддержка параметра 240 FPS не означает подтверждённые два экрана 4K/240 FPS. [Что проверено →](docs/TESTING.md)
 
 <details>
 <summary><strong>Посмотреть режим хоста</strong></summary>
@@ -62,9 +62,9 @@
 
 | Система | Архитектура | Установщик | Образ диска |
 | --- | --- | --- | --- |
-| Windows | x64 · Intel / AMD | [Скачать EXE](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-windows-x64-setup.exe) | — |
-| macOS 15+ | Apple Silicon | [Скачать PKG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-arm64.pkg) | [Скачать DMG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-arm64.dmg) |
-| macOS 15+ | Intel | [Скачать PKG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-x86_64.pkg) | [Скачать DMG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-x86_64.dmg) |
+| Windows | x64 · Intel / AMD | [Скачать EXE](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.1/VirtualKVM-0.2.1-windows-x64-setup.exe) | — |
+| macOS 15+ | Apple Silicon | [Скачать PKG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.1/VirtualKVM-0.2.1-macos-arm64.pkg) | [Скачать DMG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.1/VirtualKVM-0.2.1-macos-arm64.dmg) |
+| macOS 15+ | Intel | [Скачать PKG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.1/VirtualKVM-0.2.1-macos-x86_64.pkg) | [Скачать DMG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.1/VirtualKVM-0.2.1-macos-x86_64.dmg) |
 
 Python и FFmpeg входят в установщик. Для Mac выберите PKG **или** DMG своей архитектуры. [Последний релиз →](https://github.com/Suqesse/VirtualKVM/releases/latest) · [Пошаговая инструкция →](docs/INSTALLERS.md)
 
@@ -128,7 +128,7 @@ python -m virtualkvm
 | :--- | :--- | :--- |
 | **Windows** | Хост и клиент; GDI-захват, SendInput, DirectShow-аудио. | Нативные API требуют проверки на реальном ПК. |
 | **macOS** | Хост и клиент; AVFoundation, Quartz, VideoToolbox. | Нужны разрешения ОС и проверка на реальном Mac. |
-| **Linux** | Разработка, синтетические хосты и клиентские проверки. | 163 автоматических теста, A/V и проверка распакованной сборки прошли. |
+| **Linux** | Разработка, синтетические хосты и клиентские проверки. | 172 автоматических теста, A/V и проверка распакованной сборки прошли. |
 
 Для системного звука может понадобиться Stereo Mix / виртуальный аудиокабель на Windows или loopback-устройство на macOS. Общая папка работает внутри приложения; системный диск SMB/NFS не монтируется. [Возможности и ограничения →](docs/GUIDE.md)
 
@@ -143,7 +143,7 @@ python -m pip install -e ".[build]"
 python scripts/package.py
 ```
 
-Локальная проверка: **163 теста прошли; один нативный сценарий выполняется только на Windows**. Доступны [отчёт с хешами исходников](docs/validation/linux-0.2.0.json) и [матрица аппаратных проверок](docs/TESTING.md). A/V-тесты используют выключенную громкость; реальный аудиовыход и физическая задержка требуют отдельного измерения.
+Локальная проверка: **172 теста прошли; один нативный сценарий выполняется только на Windows**. Доступны [отчёт с хешами исходников](docs/validation/linux-0.2.1.json) и [матрица аппаратных проверок](docs/TESTING.md). A/V-тесты используют выключенную громкость; реальный аудиовыход и физическая задержка требуют отдельного измерения.
 
 [Installers](https://github.com/Suqesse/VirtualKVM/actions/workflows/installers.yml) собирает автономные Windows Setup и macOS PKG/DMG со встроенным FFmpeg. [Test](https://github.com/Suqesse/VirtualKVM/actions/workflows/ci.yml) проверяет Windows, macOS и Linux и сохраняет обычные PyInstaller-архивы без FFmpeg в **Artifacts**. PyInstaller собирает приложение для той ОС, на которой запущен.
 

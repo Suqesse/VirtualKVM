@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import collections
+import errno
 import hashlib
 import hmac
 import json
@@ -174,10 +175,11 @@ class HostServer:
                  on_event: Callable[[dict], None], on_clipboard=None, receive_dir=None,
                  on_status=None, on_disconnect=None, displays=None, on_stream_request=None,
                  on_stream_start=None, on_stream_stop=None, shared_dir: Path | None = None,
-                 shared_writable: bool = False):
+                 shared_writable: bool = False, allow_port_fallback: bool = False):
         # Validate the PIN without retaining any derived proof.
         pairing_proof(pin, "00" * 32, "00" * 32)
         self.bind, self.port = bind, port
+        self.allow_port_fallback = allow_port_fallback
         self.state_dir = Path(state_dir)
         self.receive_dir = Path(receive_dir) if receive_dir is not None else self.state_dir / "received"
         self.shared = SharedDirectory(shared_dir, shared_writable, forbidden=self.state_dir)
@@ -210,13 +212,25 @@ class HostServer:
             raise RuntimeError("Host is already running")
         self._stopping.clear()
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        option = socket.SO_EXCLUSIVEADDRUSE if os.name == "nt" else socket.SO_REUSEADDR
+        listener.setsockopt(socket.SOL_SOCKET, option, 1)
         try:
-            listener.bind((self.bind, self.port))
+            try:
+                listener.bind((self.bind, self.port))
+            except OSError as error:
+                unavailable = error.errno in (errno.EACCES, errno.EADDRINUSE) or getattr(error, "winerror", None) in (10013, 10048)
+                if not self.allow_port_fallback or not self.port or not unavailable:
+                    raise
+                listener.bind((self.bind, 0))
+                _notify(self.on_status, f"Порт {self.port} недоступен. ОС выбрала доступный порт {listener.getsockname()[1]}.")
             listener.listen(8)
             listener.settimeout(0.2)
-        except BaseException:
+        except BaseException as error:
             listener.close()
+            if isinstance(error, OSError) and getattr(error, "winerror", None) == 10013:
+                raise RuntimeError("Windows запретила открытие порта (10013). Проверьте сетевые правила для VirtualKVM "
+                                   "и зарезервированные TCP-порты Windows. Выберите другой интерфейс или порт; "
+                                   "приложение не требует запуска от администратора.") from error
             raise
         self._listener = listener
         self._accept_thread = threading.Thread(target=self._accept, args=(listener,), name="virtualkvm-host", daemon=True)

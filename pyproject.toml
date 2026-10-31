@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "virtualkvm"
-version = "0.2.0"
+version = "0.2.1"
 description = "Encrypted desktop video and input sharing between Windows and macOS"
 readme = "README.md"
 requires-python = ">=3.11"
