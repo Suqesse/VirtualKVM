@@ -2,13 +2,20 @@ name: Publish installers
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
+    paths:
+      - '.github/workflows/release.yml'
+      - 'packaging/RELEASE_NOTES.md'
+      - 'scripts/release_notes.py'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -60,4 +67,22 @@ jobs:
           mapfile -t FILES < <(find artifacts -type f \( -name '*.exe' -o -name '*.pkg' -o -name '*.dmg' \) | sort)
           test "${#FILES[@]}" -eq 5
           FILES+=("artifacts/SHA256SUMS" "artifacts/installation-checks.json")
-          gh release create "$GITHUB_REF_NAME" "${FILES[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --title "VirtualKVM $GITHUB_REF_NAME — desktop installers" --notes-file packaging/RELEASE_NOTES.md
+          python scripts/release_notes.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" --output build/release-notes.md
+          gh release create "$GITHUB_REF_NAME" "${FILES[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --latest --title "VirtualKVM ${GITHUB_REF_NAME#v}" --notes-file build/release-notes.md
+
+  update-release-page:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify existing installers and publish the Latest release page
+        run: python scripts/release_notes.py --repository "$GITHUB_REPOSITORY" --output build/release-notes.md --update-existing

@@ -1,19 +1,34 @@
-## VirtualKVM 0.2.0
+## Скачать VirtualKVM {{VERSION}}
 
-A quieter, minimal interface with neutral colors and compact controls. Configure 1–8 source screens: drag a window layout, enter exact coordinates, use presets, or assign each source to a separate local monitor with optional fullscreen. Layouts persist; older two-screen preferences migrate automatically. Per-source aspect preservation handles mixed landscape/portrait screens and Retina orientation.
+| Система | Архитектура | Установщик | Образ диска |
+| --- | --- | --- | --- |
+| Windows | x64 · Intel / AMD | [Скачать EXE](https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/VirtualKVM-{{VERSION}}-windows-x64-setup.exe) | — |
+| macOS 15 и новее | Apple Silicon · M1 и новее | [Скачать PKG](https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/VirtualKVM-{{VERSION}}-macos-arm64.pkg) | [Скачать DMG](https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/VirtualKVM-{{VERSION}}-macos-arm64.dmg) |
+| macOS 15 и новее | Intel · x86_64 | [Скачать PKG](https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/VirtualKVM-{{VERSION}}-macos-x86_64.pkg) | [Скачать DMG](https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/VirtualKVM-{{VERSION}}-macos-x86_64.dmg) |
 
-VirtualKVM shares screens already available to the host OS. It does not create virtual OS displays. Native monitor arrangement, rotation and DPI remain configured in Windows/macOS.
+Python, Qt, FFmpeg и ffprobe уже включены. Дополнительно устанавливать их не нужно. Для Mac выберите **один** вариант: мастер установки PKG или DMG с переносом приложения в «Программы».
 
-The pilot installers include Python, Qt, FFmpeg and ffprobe. No separate runtime installation or post-install download is required.
+[Инструкция по установке](https://github.com/{{REPOSITORY}}/blob/v{{VERSION}}/docs/INSTALLERS.md) · [Руководство](https://github.com/{{REPOSITORY}}/blob/v{{VERSION}}/docs/GUIDE.md) · [SHA-256](https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/SHA256SUMS)
 
-- **Windows x64:** run `VirtualKVM-0.2.0-windows-x64-setup.exe`.
-- **Mac Apple Silicon (macOS 15 or later):** use the `macos-arm64.pkg` wizard or matching `.dmg`.
-- **Mac Intel (macOS 15 or later):** use the `macos-x86_64.pkg` wizard or matching `.dmg`.
+## Изменения в 0.2.0
 
-Packages are published only after source tests, native installation, installed-interface/resource validation, offline A/V, upgrade and platform-specific uninstall/disk-image checks pass for the exact tagged commit.
+- Минималистичный светлый интерфейс со спокойными цветами, без слоганов.
+- Настройка от 1 до 8 экранов: перетаскивание, точные X/Y, готовые схемы расположения.
+- Назначение источников отдельным локальным мониторам и полноэкранный режим.
+- Сохранение схемы и перенос прежних настроек двух экранов.
+- Сохранение пропорций горизонтальных и портретных экранов, учёт ориентации Retina.
+- Проверка интерфейса после установки; повтор сборки DMG при временной занятости DiskImages.
 
-These are unsigned pilot builds: Apple Developer ID/notarization and Windows Authenticode certificates are not included. Screen Recording, Accessibility and selected audio-device permissions still use normal OS prompts. Installers do not start a sharing host automatically. Existing preferences and shared files are preserved.
+## Проверки
 
-240 FPS is a configurable target. Native capture/display throughput, physical multi-monitor placement, audio output and end-to-end latency still require hardware validation.
+Установщики прошли нативные проверки на **Windows x64, Mac Apple Silicon и Mac Intel**: установка, интерфейс и ресурсы, автономные видео и звук, обновление с сохранением пользовательских данных. Дополнительно проверены удаление на Windows и содержимое DMG на macOS.
 
-Application code: MIT. Bundled media components have their own licenses; see the included `licenses` directory and runtime build/source manifest.
+[Отчёт установок и точный коммит исходников](https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/installation-checks.json) · [Матрица тестирования](https://github.com/{{REPOSITORY}}/blob/v{{VERSION}}/docs/TESTING.md)
+
+## Перед первым запуском
+
+Это пилотная версия без доверенных подписей Apple Developer ID / Windows Authenticode и без нотарификации Apple. Разрешения на запись экрана, ввод и выбранное аудиоустройство выдаются обычным способом в настройках ОС. Установка сама не запускает общий доступ.
+
+Приложение передаёт существующие экраны хоста; новые виртуальные дисплеи в ОС не создаются. **240 FPS — настраиваемая цель**: фактические захват, показ, звук и задержка зависят от оборудования и требуют измерений на реальных компьютерах.
+
+Код приложения — MIT. Лицензии включённых компонентов находятся в каталоге `licenses` установленного приложения.

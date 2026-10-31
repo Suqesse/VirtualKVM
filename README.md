@@ -14,6 +14,7 @@
 </p>
 
 <p>
+  <a href="https://github.com/Suqesse/VirtualKVM/releases/latest">Скачать</a> ·
   <a href="#быстрый-старт">Начать</a> ·
   <a href="docs/GUIDE.md">Руководство</a> ·
   <a href="docs/ARCHITECTURE.md">Архитектура</a> ·
@@ -59,7 +60,13 @@
 
 ### Установить приложение
 
-Скачайте [установщик для Windows или Mac](https://github.com/Suqesse/VirtualKVM/releases): `.exe` для Windows x64, `.pkg` или `.dmg` для своей архитектуры Mac с macOS 15 или новее. Python и FFmpeg входят в установщик. [Пошаговая инструкция →](docs/INSTALLERS.md)
+| Система | Архитектура | Установщик | Образ диска |
+| --- | --- | --- | --- |
+| Windows | x64 · Intel / AMD | [Скачать EXE](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-windows-x64-setup.exe) | — |
+| macOS 15+ | Apple Silicon | [Скачать PKG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-arm64.pkg) | [Скачать DMG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-arm64.dmg) |
+| macOS 15+ | Intel | [Скачать PKG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-x86_64.pkg) | [Скачать DMG](https://github.com/Suqesse/VirtualKVM/releases/download/v0.2.0/VirtualKVM-0.2.0-macos-x86_64.dmg) |
+
+Python и FFmpeg входят в установщик. Для Mac выберите PKG **или** DMG своей архитектуры. [Последний релиз →](https://github.com/Suqesse/VirtualKVM/releases/latest) · [Пошаговая инструкция →](docs/INSTALLERS.md)
 
 Нативные пакеты проходят сборку и проверку установки в [Installers](https://github.com/Suqesse/VirtualKVM/actions/workflows/installers.yml). Пилотные пакеты выпускаются без доверенной подписи, пока владелец проекта не добавит сертификаты.
 
