@@ -445,13 +445,16 @@ class HostServer:
                 session.transfer.close()
             with self._lock:
                 was_controller = self._session is session and session is not None
-                if was_controller:
-                    self._session = None
                 self._connections.discard(raw)
                 self._connections.discard(connection)
             _shutdown(connection)
             if was_controller:
+                # Keep the controller slot occupied until its media/input cleanup
+                # finishes. A late disconnect must not tear down a new session.
                 _notify(self.on_disconnect)
+                with self._lock:
+                    if self._session is session:
+                        self._session = None
                 _notify(self.on_status, "Viewer disconnected")
             with self._lock:
                 self._threads.discard(threading.current_thread())
@@ -641,12 +644,14 @@ class ViewerClient:
                 _notify(on_pairing_code, code)
                 _send_message(connection, {"type": "request_access", "name": name, "control": control}, self._send_lock)
                 connection.settimeout(65)
-                if confirm_pairing is not None and confirm_pairing(code) is not True:
-                    raise SecurityError("Сверка кода отменена.")
                 response = _receive_message(connection, timeout=65)
                 if response.get("type") == "awaiting_approval":
                     _notify(self.on_status, "Подтвердите подключение на другом компьютере и сверьте короткий код сеанса.")
+                    if confirm_pairing is not None and confirm_pairing(code) is not True:
+                        raise SecurityError("Сверка кода отменена.")
                     response = _receive_message(connection, timeout=65)
+                elif response.get("type") == "authenticated":
+                    raise ProtocolError("Хост пропустил подтверждение подключения.")
             else:
                 proof = pairing_proof(pin, challenge.get("nonce"), fingerprint)
                 _send_message(connection, {"type": "authenticate", "proof": proof}, self._send_lock)

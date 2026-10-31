@@ -559,7 +559,13 @@ class MainWindow(QMainWindow):
         heading.addStretch()
         self.connection_badge = QLabel("●  Готов к подключению")
         self.connection_badge.setObjectName("connectionBadge")
+        self.connection_badge.setTextFormat(Qt.TextFormat.PlainText)
         heading.addWidget(self.connection_badge)
+        self.incoming_stop = QPushButton("Прекратить сеанс")
+        self.incoming_stop.setObjectName("dangerButton")
+        self.incoming_stop.clicked.connect(self._release_all_control)
+        self.incoming_stop.hide()
+        heading.addWidget(self.incoming_stop)
         layout.addLayout(heading)
         tabs = QTabWidget()
         tabs.addTab(self._viewer_tab(), "Подключиться")
@@ -577,7 +583,7 @@ class MainWindow(QMainWindow):
         shared.addStretch()
         release = QPushButton("Вернуть управление")
         release.setObjectName("dangerButton")
-        release.clicked.connect(self.emergency_release)
+        release.clicked.connect(self._release_all_control)
         shared.addWidget(release)
         layout.addLayout(shared)
         self.status_label = QLabel("Выберите компьютер в списке. При первом подключении сверьте короткий код на двух экранах.")
@@ -606,7 +612,7 @@ class MainWindow(QMainWindow):
         emergency = QAction("Emergency release", self)
         emergency.setShortcut(QKeySequence("Ctrl+Alt+Shift+Esc"))
         emergency.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
-        emergency.triggered.connect(self.emergency_release)
+        emergency.triggered.connect(self._release_all_control)
         self.addAction(emergency)
         QApplication.clipboard().dataChanged.connect(self._local_clipboard)
         self._clipboard_timer = QTimer(self)
@@ -1148,6 +1154,7 @@ class MainWindow(QMainWindow):
         return text
 
     def _update_stats(self) -> None:
+        self.incoming_stop.setVisible(bool(self._host and self._host.server.sessions))
         if self._host is not None:
             sessions = self._host.server.sessions
             self.host_disconnect.setEnabled(bool(sessions))
@@ -1155,8 +1162,12 @@ class MainWindow(QMainWindow):
                 session = sessions[0]
                 mode = "управление разрешено" if session["permissions"]["control"] else "только просмотр"
                 self.host_session_label.setText(f"Подключён: {session['name'] or session['host']} · {mode}")
+                if self._viewer is None:
+                    self.connection_badge.setText(f"●  Подключён: {(session['name'] or session['host'])[:40]}")
             else:
                 self.host_session_label.setText("Нет активного подключения")
+                if self._viewer is None and self._host_running:
+                    self.connection_badge.setText("●  Хост доступен")
         if self._awaiting_video_at is not None and self._viewer is not None and not self._disconnecting:
             ready = all(index in self.video_windows and
                         (self.video_windows[index].av_frames or self.video_windows[index].canvas.painted_frames)
@@ -1649,7 +1660,7 @@ class MainWindow(QMainWindow):
     def _video_window(self, index: int) -> VideoWindow:
         window = self.video_windows.get(index) or self._hidden_video_windows.get(index)
         if window is None:
-            window = VideoWindow(index, self._send_input, self.emergency_release,
+            window = VideoWindow(index, self._send_input, self._release_all_control,
                                  self.control_enabled.setChecked, self.control_enabled.isChecked())
             window.setStyleSheet(_STYLE)
             window.closed.connect(self._video_closed)
@@ -1720,6 +1731,11 @@ class MainWindow(QMainWindow):
         self.control_enabled.setChecked(False)
         for window in list(self.video_windows.values()):
             window.canvas.release_pressed()
+
+    def _release_all_control(self):
+        self.emergency_release()
+        if self._host is not None and self._host.server.sessions:
+            self._host.server.disconnect_viewer()
 
     def _input_failed(self, message: str) -> None:
         self._status(message)

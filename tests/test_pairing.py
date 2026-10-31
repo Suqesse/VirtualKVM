@@ -45,6 +45,15 @@ class ApprovalTests(unittest.TestCase):
             self.quick(on_pairing_code=lambda code: pairs.append(('viewer', code)))
             self.assertEqual(pairs[-1][1], pairs[-2][1])
             self.assertEqual(len(pairs[-1][1].replace(' ', '')), 12)
+            rival = ViewerClient(self.root / 'rival')
+            confirmations = []
+            try:
+                with self.assertRaises(SecurityError):
+                    rival.connect(*self.host.server.address, fingerprint=self.host.fingerprint,
+                                  approval=True, name='Rival', confirm_pairing=lambda code: confirmations.append(code))
+                self.assertFalse(confirmations, 'A busy host must not show a misleading code-confirmation dialog')
+            finally:
+                rival.disconnect()
             self.client.disconnect()
             wait_for(lambda: not self.host.server.sessions)
         self.assertNotEqual(pairs[0][1], pairs[2][1])

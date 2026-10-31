@@ -1,5 +1,5 @@
 {
-  "created_utc": "2026-10-31T03:43:54.906035+00:00",
+  "created_utc": "2026-10-31T03:57:14.985209+00:00",
   "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
   "python": "3.12.14",
   "checks": [
@@ -20,14 +20,14 @@
     {
       "name": "discovery",
       "exit_code": 0,
-      "seconds": 4.03,
+      "seconds": 3.98,
       "log": "build/validation/discovery.log",
       "passed": true
     },
     {
       "name": "tests",
       "exit_code": 0,
-      "seconds": 48.33,
+      "seconds": 51.58,
       "log": "build/validation/tests.log",
       "passed": true,
       "executed_tests": 190,
@@ -36,7 +36,7 @@
     {
       "name": "audio-video-smoke",
       "exit_code": 0,
-      "seconds": 4.32,
+      "seconds": 4.13,
       "log": "build/validation/audio-video-smoke.log",
       "passed": true
     },
@@ -57,14 +57,14 @@
     {
       "name": "packaged-discovery",
       "exit_code": 0,
-      "seconds": 4.08,
+      "seconds": 4.07,
       "log": "build/validation/packaged-discovery.log",
       "passed": true
     },
     {
       "name": "packaged-audio-video",
       "exit_code": 0,
-      "seconds": 4.43,
+      "seconds": 4.33,
       "log": "build/validation/packaged-audio-video.log",
       "passed": true
     }
@@ -74,11 +74,11 @@
     "virtualkvm/__init__.py": "a5bf9a13d5b9c20ee16d49e6c1cc10574c5bcaeedfc2f891938164ae8d06fe84",
     "virtualkvm/__main__.py": "19fc2081a316ec0e84ad5c84ebd6389f5225ca4f38fe849e138d4777b1853500",
     "virtualkvm/app.py": "5603a6a8d36a92b3aea2ffdd09375f7242c3ef1512cc01a46a9a166c4ec8a7cb",
-    "virtualkvm/control.py": "01c560edf260ed09026ac512a9bc1f29f3f06898e7cb49050bb09674ae3cf86c",
+    "virtualkvm/control.py": "86d2c6dea4439251bc4f552ed1b73e7053e0c36e1cbfef23f29ad2d2ba4acfa8",
     "virtualkvm/discovery.py": "b4a3a629ed7de9deace3416be75b0ec7eb183623141bc72093b3aab19ddb01b4",
     "virtualkvm/display_gui.py": "fcb79e6e2461ef1b58be1d1cdfe5564846cb2d9fddd5d52a7d22a7fbbc2983b6",
     "virtualkvm/display_layout.py": "af147ffb3f63a4f0a6ed7ae8296b8cac69663dea0e4357740085851230d46737",
-    "virtualkvm/gui.py": "cf2367ca65adb02d12785a0d9b57ccc204d0c7cd9ecb873402b657fec49ab3b3",
+    "virtualkvm/gui.py": "8cc0bcd0f4a04565bb693f702c1724736780ca3fad4f2af7d8a2dcdfb41605b8",
     "virtualkvm/lan_gui.py": "7b58cab07861f1dceb22481ce27931c3e47820e0506a8e7ab80fdf1b42b36995",
     "virtualkvm/media.py": "51209a348e70a52121681c5ad3e30a5ca132ba300425c3054ee6fd9fc17ed6c3",
     "virtualkvm/native.py": "4ac25a25ef6cb78805d82b9c08d4bf1e3e79c9052b07ec2ca9ba63116ddbc9be",

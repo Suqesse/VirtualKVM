@@ -74,6 +74,18 @@ class LanGuiTests(unittest.TestCase):
         self.host.host_disconnect.click()
         self.wait_for(lambda:self.viewer._viewer is None)
         self.assertTrue(any(event.get('key')=='shift' and event.get('down') is False for event in controller.native.events))
+        self.wait_for(lambda:not controller.server.sessions)
+        # A remembered key skips the viewer's first-use dialog, while the
+        # owner still approves. The prominent owner action revokes access.
+        self.viewer.lan_panel.connect_button.click()
+        self.wait_for(lambda:bool(self.host._approval_dialogs))
+        self.assertFalse(self.viewer._approval_dialogs)
+        self.host._approval_dialogs[0]._allow()
+        self.wait_for(lambda:bool(self.viewer.video_windows) and not self.viewer.video_windows[0].canvas._image.isNull())
+        self.host._update_stats()
+        self.assertTrue(self.host.incoming_stop.isVisible())
+        self.host.incoming_stop.click()
+        self.wait_for(lambda:self.viewer._viewer is None)
 
     def test_windows_open_before_frames_and_missing_video_has_a_visible_reason(self):
         class SilentViewer:
