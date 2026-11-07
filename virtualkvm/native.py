@@ -449,6 +449,8 @@ class _MacBackend:
         self._permission_checked = 0.0
         self._last_click = None
         self._click_count = 0
+        self._displays: list[Display] = []
+        self._display_time = 0.0
 
     def send(self, event):
         q = self.q
@@ -492,7 +494,10 @@ class _MacBackend:
             native_event = q.CGEventCreateMouseEvent(None, action, point, button)
         elif kind == "move":
             current = q.CGEventGetLocation(q.CGEventCreate(None))
-            displays = list_displays()
+            # Relative motion arrives at mouse rate; refresh the screen list once a second.
+            if not self._displays or now - self._display_time > 1:
+                self._displays, self._display_time = list_displays(), now
+            displays = self._displays
             left = min(d.x for d in displays)
             top = min(d.y for d in displays)
             right = max(d.x + d.width for d in displays) - 1

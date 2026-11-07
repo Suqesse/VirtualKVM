@@ -65,6 +65,7 @@ def task_xml(command: str, arguments: list[str], user: str) -> str:
         raise ValueError("Invalid autostart command")
     joined = subprocess.list2cmdline(arguments)
     user, command, joined = escape(user), escape(command), escape(joined)
+    argument_line = f"\n      <Arguments>{joined}</Arguments>" if joined else ""
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -94,8 +95,7 @@ def task_xml(command: str, arguments: list[str], user: str) -> str:
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{command}</Command>
-      <Arguments>{joined}</Arguments>
+      <Command>{command}</Command>{argument_line}
     </Exec>
   </Actions>
 </Task>
@@ -144,7 +144,8 @@ def _run_elevated(executable: str, arguments: list[str], *, wait: bool, show: in
     kernel32.GetExitCodeProcess.argtypes = [C.c_void_p, C.POINTER(C.c_uint32)]
     kernel32.CloseHandle.argtypes = [C.c_void_p]
     try:
-        kernel32.WaitForSingleObject(info.hProcess, 60000)
+        if kernel32.WaitForSingleObject(info.hProcess, 60000) != 0:
+            raise ElevationError("Команда администратора не завершилась за минуту")
         code = C.c_uint32()
         if not kernel32.GetExitCodeProcess(info.hProcess, C.byref(code)):
             raise ElevationError("Не удалось получить результат команды администратора")
@@ -154,15 +155,53 @@ def _run_elevated(executable: str, arguments: list[str], *, wait: bool, show: in
 
 
 def restart_elevated(arguments: list[str] | None = None) -> None:
-    """Start an elevated copy; the caller should then quit this instance."""
-    executable, args = launch_command(arguments)
+    """Start an elevated copy; the caller should then quit this instance.
+
+    The new copy waits for this process to exit (``--after-pid``) so the two
+    never compete for the listening port or the LAN announcement.
+    """
+    executable, args = launch_command(["--after-pid", str(os.getpid()), *(arguments or [])])
     _run_elevated(executable, args, wait=False, show=1)
+
+
+def wait_for_exit(pid: int, timeout: float = 20.0) -> bool:
+    """Wait until process ``pid`` has exited; True when it did within ``timeout``."""
+    if type(pid) is not int or pid <= 0 or pid == os.getpid():
+        return True
+    if supported():
+        kernel32 = C.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [C.c_uint32, C.c_int32, C.c_uint32]
+        kernel32.OpenProcess.restype = C.c_void_p
+        kernel32.WaitForSingleObject.argtypes = [C.c_void_p, C.c_uint32]
+        kernel32.WaitForSingleObject.restype = C.c_uint32
+        kernel32.CloseHandle.argtypes = [C.c_void_p]
+        handle = kernel32.OpenProcess(0x00100000, 0, pid)  # SYNCHRONIZE
+        if not handle:
+            return True  # Already gone (or never existed).
+        try:
+            return kernel32.WaitForSingleObject(handle, int(timeout * 1000)) == 0
+        finally:
+            kernel32.CloseHandle(handle)
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        time.sleep(0.1)
+    return False
 
 
 def _schtasks_run(arguments: list[str]) -> int:
     if is_admin():
-        result = subprocess.run([_schtasks(), *arguments], stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=30, **_popen_options())
+        try:
+            result = subprocess.run([_schtasks(), *arguments], stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=30, **_popen_options())
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ElevationError(f"Планировщик заданий не ответил: {error}") from error
         return result.returncode
     code = _run_elevated(_schtasks(), arguments, wait=True)
     return 1 if code is None else code

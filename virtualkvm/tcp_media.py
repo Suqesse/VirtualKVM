@@ -48,7 +48,9 @@ class OutputSlot:
         if process is None or process.stdout is None:
             return
         self._connection.settimeout(15)
-        read = getattr(process.stdout, 'read1', process.stdout.read)
+        # Senders that restart their encoder (capture recovery) expose a reader
+        # that follows the current process; others are read directly.
+        read = getattr(self._sender, 'read_output', None) or getattr(process.stdout, 'read1', process.stdout.read)
         try:
             while not self._closed.is_set():
                 block = read(64 * 1024)

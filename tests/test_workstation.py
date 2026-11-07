@@ -109,6 +109,59 @@ class WindowsCaptureCommandTests(unittest.TestCase):
                 self.assertFalse(command[command.index("-vf") + 1].startswith("hwdownload"))
 
 
+class CaptureRecoveryTests(unittest.TestCase):
+    """Encoder restarts behind one continuous output, as after a Windows lock/UAC."""
+
+    def test_lost_capture_is_bridged_by_placeholder_and_resumed(self):
+        import subprocess
+        import time
+        locator = FFmpegLocator()
+        if not locator.encoder_usable("libx264"):
+            self.skipTest("FFmpeg lacks libx264")
+        config = StreamConfig(width=160, height=90, fps=10, bitrate_mbps=1)
+        sender = VideoSender(locator)
+        # Capture that "loses access" after one second, like ddagrab on lock.
+        capture = sender._command(["-re", "-t", "1", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10"],
+                                  config, "libx264", "pipe:1", synthetic=True, gpu_frames=False, download=False)
+        placeholder = sender._command(["-re", "-f", "lavfi", "-i", "color=c=black:s=160x90:r=5"],
+                                      config, "libx264", "pipe:1", synthetic=True, gpu_frames=False, download=False)
+        probes = []
+        sender._spawn(capture, "x" * 16, subprocess.PIPE)
+        sender._capture_command, sender._placeholder_command = capture, placeholder
+        sender._capture_probe = lambda: probes.append(time.monotonic()) or len(probes) >= 2
+        sender._recoverable = True
+        sender._thread(sender._supervise, name="capture-recovery")
+        received, stop = [], threading.Event()
+
+        def reader():
+            while not stop.is_set():
+                block = sender.read_output()
+                if not block:
+                    return
+                received.append((time.monotonic(), len(block)))
+
+        thread = threading.Thread(target=reader, daemon=True)
+        started = time.monotonic()
+        thread.start()
+        try:
+            deadline = started + 20
+            while time.monotonic() < deadline and "Capture resumed" not in sender.diagnostics:
+                self.assertTrue(sender.running, sender.diagnostics)
+                time.sleep(0.1)
+            self.assertIn("Capture resumed", sender.diagnostics)
+            self.assertTrue(any("Capture interrupted" in line for line in sender.diagnostics))
+            resumed = time.monotonic()
+            time.sleep(0.5)
+            self.assertTrue(thread.is_alive(), "The output reader must follow encoder restarts")
+            self.assertTrue(any(at > started + 1.5 for at, _size in received), "Placeholder kept the stream alive")
+            self.assertTrue(any(at > resumed for at, _size in received), "Resumed capture produced output")
+        finally:
+            stop.set()
+            sender.stop()
+            thread.join(timeout=5)
+        self.assertFalse(sender.running)
+
+
 class Nv12ReceiverTests(unittest.TestCase):
     def test_frame_sizes(self):
         self.assertEqual(frame_size("nv12", 322, 182), 322 * 182 * 3 // 2)
@@ -280,6 +333,24 @@ class WindowsElevationTests(unittest.TestCase):
             self.assertEqual(winadmin.launch_command(["x"]), (r"C:\Apps\VirtualKVM.exe", ["x"]))
         executable, arguments = winadmin.launch_command()
         self.assertEqual(arguments, ["-m", "virtualkvm"])
+
+    def test_wait_for_exit_and_argument_free_task(self):
+        import subprocess
+        import sys
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.3)"])
+        # Reap the child as its parent would, so POSIX does not keep a zombie.
+        reaper = threading.Thread(target=process.wait, daemon=True)
+        reaper.start()
+        self.assertTrue(winadmin.wait_for_exit(process.pid, timeout=10))
+        reaper.join(timeout=5)
+        self.assertNotIn("<Arguments>", winadmin.task_xml(r"C:\Apps\VirtualKVM.exe", [], "PC\\user"))
+
+    def test_elevated_restart_passes_previous_pid(self):
+        with mock.patch.object(winadmin, "_run_elevated") as run, \
+             mock.patch.object(winadmin.sys, "frozen", True, create=True), \
+             mock.patch.object(winadmin.sys, "executable", r"C:\Apps\VirtualKVM.exe"):
+            winadmin.restart_elevated()
+        self.assertEqual(run.call_args.args[1], ["--after-pid", str(os.getpid())])
 
     def test_elevation_is_unavailable_outside_windows(self):
         with mock.patch("virtualkvm.winadmin.platform.system", return_value="Linux"):

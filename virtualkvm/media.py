@@ -107,11 +107,15 @@ def _popen_options() -> dict:
     return options
 
 
+# Successful Desktop Duplication probes, shared by every locator in the process:
+# each VideoSender creates its own locator. Keyed by (ffmpeg, output, encoder).
+_DDAGRAB_OK: set[tuple[str, int, str | None]] = set()
+
+
 class FFmpegLocator:
     """Locate tools without downloading executables or changing system state."""
 
     def __init__(self, ffmpeg: str | None = None, ffprobe: str | None = None):
-        self._ddagrab_ok: set[tuple[int, str | None]] = set()
         explicit_ffmpeg = ffmpeg or os.environ.get("VIRTUALKVM_FFMPEG")
         probe_override = ffprobe or os.environ.get("VIRTUALKVM_FFPROBE")
         bundled = self._bundled_pair() if not explicit_ffmpeg else None
@@ -202,15 +206,15 @@ class FFmpegLocator:
         return frozenset(match.group(1) for line in self._query("-filters").splitlines()
                          if (match := re.match(r"^\s*[.A-Z]{2,3}\s+([a-zA-Z0-9_]+)\s+\S+->\S+", line)))
 
-    def ddagrab_usable(self, output_index: int, encoder: str | None = None) -> bool:
+    def ddagrab_usable(self, output_index: int, encoder: str | None = None, *, cached: bool = True) -> bool:
         """Probe Desktop Duplication capture of one output, optionally into ``encoder``.
 
         With an encoder the probe hands GPU (D3D11) frames straight to it, which
         is what zero-copy streaming does. Only successes are cached: a monitor,
         driver or remote-session change can make a failed output usable later.
         """
-        key = (output_index, encoder)
-        if key in self._ddagrab_ok:
+        key = (self.ffmpeg, output_index, encoder)
+        if cached and key in _DDAGRAB_OK:
             return True
         if type(output_index) is not int or not 0 <= output_index < 64 or "ddagrab" not in self.filters():
             return False
@@ -227,8 +231,21 @@ class FFmpegLocator:
         except (OSError, subprocess.TimeoutExpired):
             return False
         if result.returncode == 0:
-            self._ddagrab_ok.add(key)
+            _DDAGRAB_OK.add(key)
         return result.returncode == 0
+
+    def gdigrab_usable(self, source: "CaptureSource") -> bool:
+        """Probe one GDI frame of ``source``; it fails while the desktop is locked."""
+        command = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "gdigrab",
+                   "-framerate", "5", "-offset_x", str(source.x), "-offset_y", str(source.y)]
+        if source.width is not None:
+            command += ["-video_size", f"{source.width}x{source.height}"]
+        command += ["-i", "desktop", "-frames:v", "1", "-f", "null", "-"]
+        try:
+            return subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  timeout=8, **_popen_options()).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
 
     def check_ready(self) -> dict:
         if "srt" not in self.protocols():
@@ -523,6 +540,14 @@ class VideoSender(_FFmpegProcess):
         self.selected_encoder: str | None = None
         self.capture_method: str | None = None
         self.zero_copy = False
+        self._dda_output: int | None = None
+        # Capture recovery (Windows, TCP, video only): see _supervise.
+        self._recoverable = False
+        self._gave_up = False
+        self._swap_lock = threading.Lock()
+        self._capture_command: list[str] | None = None
+        self._placeholder_command: list[str] | None = None
+        self._capture_probe: Callable[[], bool] | None = None
 
     def _encoder(self, config: StreamConfig, synthetic: bool) -> str:
         prefix = "h264" if config.codec == "h264" else "hevc"
@@ -569,6 +594,7 @@ class VideoSender(_FFmpegProcess):
         if output is None or output.rotated:
             return None
         native_size = (config.width, config.height) == (output.width, output.height)
+        self._dda_output = output.output
         if (encoder is not None and encoder.endswith("_nvenc") and native_size
                 and config.width % 2 == 0 and config.height % 2 == 0
                 and self.locator.ddagrab_usable(output.output, encoder)):
@@ -624,14 +650,10 @@ class VideoSender(_FFmpegProcess):
                     "-i", f"{device}:{audio_device}"]
         raise MediaError("Native capture is supported on Windows and macOS. Use synthetic=True for a headless Linux test.")
 
-    def start(self, destination: str, port: int, passphrase: str, source: CaptureSource,
-              config: StreamConfig, synthetic: bool = False, *, transport: str = "srt") -> None:
-        self.locator.check_ready()
-        if transport not in ("srt", "tcp"):
-            raise ValueError("Unknown video transport")
-        url = "pipe:1" if transport == "tcp" else _srt_url(destination, port, passphrase, config.latency_ms, "caller")
-        encoder = self._encoder(config, synthetic)
-        capture = self._capture_args(source, config, synthetic, encoder)
+    def _command(self, capture: list[str], config: StreamConfig, encoder: str, url: str, *,
+                 synthetic: bool, gpu_frames: bool, download: bool) -> list[str]:
+        """Full encoder command. ``gpu_frames``: D3D11 frames go to the encoder as-is;
+        ``download``: D3D11 frames are fetched once before the CPU filter chain."""
         command = [self.locator.ffmpeg, "-hide_banner", "-loglevel", "warning", "-threads", "2",
                    "-filter_threads", "2"]
         if config.audio:
@@ -643,15 +665,14 @@ class VideoSender(_FFmpegProcess):
                         "-ar", "48000", "-ac", "2", "-af", "aresample=async=1000:first_pts=0"]
         else:
             command += ["-an"]
-        if not self.zero_copy:
-            # GPU-captured frames are fetched once; the rest of the chain is unchanged.
-            filters = ("hwdownload,format=bgra," if self.capture_method == "ddagrab" else "")
+        if not gpu_frames:
+            filters = "hwdownload,format=bgra," if download else ""
             filters += f"scale={config.width}:{config.height}"
             if config.width != config.coded_width or config.height != config.coded_height:
                 filters += f",format=rgb24,pad={config.coded_width}:{config.coded_height}:0:0,format=yuv420p"
             command += ["-vf", filters]
         command += ["-c:v", encoder, "-threads", "2"]
-        if not self.zero_copy:
+        if not gpu_frames:
             command += ["-pix_fmt", "yuv420p"]
         command += ["-bf", "0", "-fps_mode", "passthrough",
                    "-g", str(max(1, config.fps // 2)), "-b:v", f"{config.bitrate_mbps:g}M",
@@ -675,6 +696,19 @@ class VideoSender(_FFmpegProcess):
             command += ["-realtime", "1", "-allow_sw", "0"]
         command += ["-f", "mpegts", "-mpegts_flags", "+resend_headers", "-muxdelay", "0",
                     "-muxpreload", "0", "-flush_packets", "1", url]
+        return command
+
+    def start(self, destination: str, port: int, passphrase: str, source: CaptureSource,
+              config: StreamConfig, synthetic: bool = False, *, transport: str = "srt") -> None:
+        self.locator.check_ready()
+        if transport not in ("srt", "tcp"):
+            raise ValueError("Unknown video transport")
+        url = "pipe:1" if transport == "tcp" else _srt_url(destination, port, passphrase, config.latency_ms, "caller")
+        encoder = self._encoder(config, synthetic)
+        capture = self._capture_args(source, config, synthetic, encoder)
+        command = self._command(capture, config, encoder, url, synthetic=synthetic, gpu_frames=self.zero_copy,
+                                download=self.capture_method == "ddagrab" and not self.zero_copy)
+        self._recoverable = self._gave_up = False
         self._spawn(command, passphrase, subprocess.PIPE if transport == "tcp" else subprocess.DEVNULL)
         self.selected_encoder = encoder
         if self.capture_method in ("ddagrab", "gdigrab"):
@@ -683,6 +717,136 @@ class VideoSender(_FFmpegProcess):
             self._log(f"Using software encoder {encoder}; requested {config.fps} FPS is a target, not a performance guarantee")
         else:
             self._log(f"Using hardware encoder {encoder}")
+        # Windows ends desktop capture on lock, Ctrl+Alt+Del, UAC prompts and
+        # display-mode changes. Over TCP the host can bridge that gap with a
+        # placeholder picture and resume capture without dropping the session.
+        # Audio streams keep their single timestamp timeline, so they are not
+        # restarted; SRT has no reconnecting caller.
+        if transport == "tcp" and not config.audio and self.capture_method in ("ddagrab", "gdigrab"):
+            placeholder = ["-re", "-f", "lavfi", "-i",
+                           f"color=c=0x1e2229:s={config.coded_width}x{config.coded_height}:r=5"]
+            self._placeholder_command = self._command(placeholder, config, encoder, url, synthetic=False,
+                                                      gpu_frames=False, download=False)
+            self._capture_command = command
+            if self.capture_method == "ddagrab":
+                output, probe_encoder = self._dda_output, encoder if self.zero_copy else None
+                self._capture_probe = lambda: self.locator.ddagrab_usable(output, probe_encoder, cached=False)
+            else:
+                self._capture_probe = lambda: self.locator.gdigrab_usable(source)
+            self._recoverable = True
+            self._thread(self._supervise, name="capture-recovery")
+
+    @property
+    def running(self) -> bool:
+        if self._recoverable and not self._gave_up and not self._stop_event.is_set():
+            return self._process is not None
+        return super().running
+
+    def _spawn_child(self, command: list[str]) -> subprocess.Popen:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, bufsize=0, **_popen_options())
+        threading.Thread(target=self._read_errors, args=(process,), name="ffmpeg-diagnostics",
+                         daemon=True).start()
+        return process
+
+    @staticmethod
+    def _end_child(process: subprocess.Popen) -> None:
+        if process.poll() is None:
+            try:
+                if process.stdin:
+                    process.stdin.write(b"q\n")
+                    process.stdin.flush()
+                process.wait(timeout=1)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+        for pipe in (process.stdin, process.stderr):
+            if pipe:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+
+    def _swap(self, command: list[str]) -> bool:
+        """Replace the running encoder; the output reader follows the new one."""
+        try:
+            new = self._spawn_child(command)
+        except OSError as exc:
+            self._log(f"Could not restart FFmpeg: {exc}")
+            return False
+        with self._swap_lock:
+            if self._stop_event.is_set():
+                old = new
+            else:
+                old, self._process = self._process, new
+                self.last_error = None
+        if old is not None:
+            self._end_child(old)
+        return not self._stop_event.is_set()
+
+    def _supervise(self) -> None:
+        quick_failures = 0
+        while not self._stop_event.is_set():
+            process = self._process
+            if process is None:
+                return
+            started = time.monotonic()
+            process.wait()
+            if self._stop_event.is_set():
+                return
+            if self._process is not process:
+                continue
+            if process.args == self._placeholder_command:
+                quick_failures = quick_failures + 1 if time.monotonic() - started < 3 else 0
+                if quick_failures >= 3:
+                    self._gave_up = True
+                    self.last_error = "FFmpeg could not keep the stream alive while capture was unavailable"
+                    self._log(self.last_error)
+                    return
+            else:
+                self._log("Capture interrupted (locked screen, UAC prompt or display change); "
+                          "showing a placeholder and retrying")
+            if not self._swap(self._placeholder_command):
+                continue
+            placeholder = self._process
+            while not self._stop_event.wait(2):
+                if self._process is not placeholder or placeholder.poll() is not None:
+                    break
+                if self._capture_probe and self._capture_probe():
+                    if self._swap(self._capture_command):
+                        self._log("Capture resumed")
+                    break
+
+    def read_output(self, size: int = 65536) -> bytes:
+        """Read encoded output, following encoder restarts during capture recovery."""
+        while True:
+            process = self._process
+            if process is None or process.stdout is None:
+                return b""
+            try:
+                read = getattr(process.stdout, "read1", process.stdout.read)
+                block = read(size)
+            except (OSError, ValueError):
+                block = b""
+            if block:
+                return block
+            if not self._recoverable:
+                return b""
+            deadline = time.monotonic() + 15
+            while self._process is process:
+                if self._stop_event.is_set() or self._gave_up or time.monotonic() > deadline:
+                    return b""
+                time.sleep(0.02)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        with self._swap_lock:
+            pass  # No supervisor swap can start a process after this point.
+        super().stop()
 
 
 PIXEL_FORMATS = ("rgb24", "nv12")
