@@ -48,6 +48,7 @@ _VK.update({chr(n).lower(): n for n in range(65, 91)})
 _VK.update({str(n): 48 + n for n in range(10)})
 _VK.update({f"f{n}": 111 + n for n in range(1, 25)})
 _VK.update({f"numpad{n}": 96 + n for n in range(10)})
+MAX_RELATIVE_MOVE = 4096
 _MODIFIERS = {"shift", "ctrl", "alt", "meta", "rightshift", "rightctrl",
               "rightalt", "rightmeta"}
 _MAC_KEYS = dict(zip(
@@ -110,7 +111,8 @@ def _validate(event: dict) -> dict:
     fields = {"key": {"type", "key", "down"},
               "pointer": {"type", "x", "y", "display"},
               "button": {"type", "button", "down"},
-              "scroll": {"type", "dx", "dy"}}
+              "scroll": {"type", "dx", "dy"},
+              "move": {"type", "dx", "dy"}}
     if not isinstance(kind, str) or kind not in fields:
         raise ValueError("Unknown input event type")
     if set(event) - fields[kind]:
@@ -140,6 +142,13 @@ def _validate(event: dict) -> dict:
     elif kind == "scroll":
         result["dx"] = _number(event.get("dx", 0), "dx", -1000, 1000)
         result["dy"] = _number(event.get("dy", 0), "dy", -1000, 1000)
+    elif kind == "move":
+        # Relative pointer motion for captured-mouse mode, in host pixels.
+        for axis in ("dx", "dy"):
+            value = event.get(axis, 0)
+            if type(value) is not int or not -MAX_RELATIVE_MOVE <= value <= MAX_RELATIVE_MOVE:
+                raise ValueError(f"{axis} must be an integer between -{MAX_RELATIVE_MOVE} and {MAX_RELATIVE_MOVE}")
+            result[axis] = value
     return result
 
 
@@ -172,14 +181,18 @@ class _RECT(C.Structure):
     _fields_ = [(n, C.c_int32) for n in ("left", "top", "right", "bottom")]
 
 
-def _windows_monitors():
-    user32 = C.WinDLL("user32", use_last_error=True)
-    # Coordinates from the same physical-pixel space as FFmpeg gdigrab.
+def _dpi_aware(user32) -> None:
+    # Coordinates from the same physical-pixel space as FFmpeg gdigrab/ddagrab.
     try:
         user32.SetProcessDpiAwarenessContext.argtypes = [C.c_void_p]
         user32.SetProcessDpiAwarenessContext(C.c_void_p(-4))
     except AttributeError:
         user32.SetProcessDPIAware()
+
+
+def _windows_monitors():
+    user32 = C.WinDLL("user32", use_last_error=True)
+    _dpi_aware(user32)
     callback_type = C.WINFUNCTYPE(C.c_int32, C.c_void_p, C.c_void_p,
                                  C.POINTER(_RECT), C.c_ssize_t)
     monitors = []
@@ -197,6 +210,123 @@ def _windows_monitors():
     # Keep the primary desktop at index zero, then order by position.
     monitors.sort(key=lambda m: (not (m[1] == 0 and m[2] == 0), m[1], m[2]))
     return monitors
+
+
+@dataclass(frozen=True, slots=True)
+class DxgiOutput:
+    """One desktop output as FFmpeg ddagrab addresses it: adapter + output index."""
+    adapter: int
+    output: int
+    x: int
+    y: int
+    width: int
+    height: int
+    rotation: int = 1
+
+    @property
+    def rotated(self) -> bool:
+        # DXGI_MODE_ROTATION_UNSPECIFIED (0) and IDENTITY (1) need no transform.
+        return self.rotation not in (0, 1)
+
+
+class _GUID(C.Structure):
+    _fields_ = [("Data1", C.c_uint32), ("Data2", C.c_uint16), ("Data3", C.c_uint16),
+                ("Data4", C.c_ubyte * 8)]
+
+
+class _DXGI_OUTPUT_DESC(C.Structure):
+    _fields_ = [("DeviceName", C.c_wchar * 32), ("DesktopCoordinates", _RECT),
+                ("AttachedToDesktop", C.c_int32), ("Rotation", C.c_int32), ("Monitor", C.c_void_p)]
+
+
+def _com_method(pointer, index: int, *argtypes):
+    """Bind vtable entry ``index`` of a COM interface pointer (HRESULT result)."""
+    vtable = C.cast(pointer, C.POINTER(C.POINTER(C.c_void_p)))[0]
+    prototype = C.WINFUNCTYPE(C.c_int32, C.c_void_p, *argtypes)
+    return lambda *args: prototype(vtable[index])(pointer, *args)
+
+
+def _com_release(pointer) -> None:
+    if pointer:
+        vtable = C.cast(pointer, C.POINTER(C.POINTER(C.c_void_p)))[0]
+        C.WINFUNCTYPE(C.c_uint32, C.c_void_p)(vtable[2])(pointer)
+
+
+_DXGI_ERROR_NOT_FOUND = C.c_int32(0x887A0002).value
+# IID_IDXGIFactory1 {770aae78-f26f-4dba-a829-253c83d1b387}
+_IID_IDXGIFactory1 = (0x770AAE78, 0xF26F, 0x4DBA, (0xA8, 0x29, 0x25, 0x3C, 0x83, 0xD1, 0xB3, 0x87))
+
+
+def dxgi_outputs(max_adapters: int = 8) -> list[DxgiOutput]:
+    """Enumerate DXGI adapter outputs in the order FFmpeg ddagrab indexes them.
+
+    Returns an empty list outside Windows or when DXGI is unavailable; callers
+    must then fall back to GDI capture.
+    """
+    if platform.system() != "Windows":
+        return []
+    try:
+        _dpi_aware(C.WinDLL("user32", use_last_error=True))
+        dxgi = C.WinDLL("dxgi")
+        data1, data2, data3, data4 = _IID_IDXGIFactory1
+        iid = _GUID(data1, data2, data3, (C.c_ubyte * 8)(*data4))
+        factory = C.c_void_p()
+        dxgi.CreateDXGIFactory1.argtypes = [C.POINTER(_GUID), C.POINTER(C.c_void_p)]
+        dxgi.CreateDXGIFactory1.restype = C.c_int32
+        if dxgi.CreateDXGIFactory1(C.byref(iid), C.byref(factory)) < 0 or not factory:
+            return []
+    except (OSError, AttributeError):
+        return []
+    outputs: list[DxgiOutput] = []
+    try:
+        # IDXGIFactory1::EnumAdapters1 is vtable slot 12.
+        enum_adapters = _com_method(factory, 12, C.c_uint32, C.POINTER(C.c_void_p))
+        for adapter_index in range(max_adapters):
+            adapter = C.c_void_p()
+            if enum_adapters(adapter_index, C.byref(adapter)) < 0 or not adapter:
+                break
+            try:
+                # IDXGIAdapter::EnumOutputs is slot 7; IDXGIOutput::GetDesc is slot 7.
+                enum_outputs = _com_method(adapter, 7, C.c_uint32, C.POINTER(C.c_void_p))
+                for output_index in range(64):
+                    output = C.c_void_p()
+                    if enum_outputs(output_index, C.byref(output)) < 0 or not output:
+                        break
+                    try:
+                        desc = _DXGI_OUTPUT_DESC()
+                        if _com_method(output, 7, C.POINTER(_DXGI_OUTPUT_DESC))(C.byref(desc)) >= 0 \
+                                and desc.AttachedToDesktop:
+                            r = desc.DesktopCoordinates
+                            outputs.append(DxgiOutput(adapter_index, output_index, r.left, r.top,
+                                                      r.right - r.left, r.bottom - r.top, desc.Rotation))
+                    finally:
+                        _com_release(output)
+            finally:
+                _com_release(adapter)
+    except OSError:
+        return outputs
+    finally:
+        _com_release(factory)
+    return outputs
+
+
+def match_dxgi_output(outputs: list[DxgiOutput], x: int, y: int, width: int | None,
+                      height: int | None) -> DxgiOutput | None:
+    """Find the output covering exactly the requested desktop rectangle."""
+    for output in outputs:
+        if (output.x, output.y) == (x, y) and (width is None or (output.width, output.height) == (width, height)):
+            return output
+    return None
+
+
+def is_windows_admin() -> bool:
+    """True when this Windows process runs elevated (can drive elevated windows)."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        return bool(C.WinDLL("shell32").IsUserAnAdmin())
+    except (OSError, AttributeError):
+        return False
 
 
 def _quartz():
@@ -277,8 +407,8 @@ class _WindowsBackend:
 
     def _send(self, entry):
         if self.user32.SendInput(1, C.byref(entry), C.sizeof(_INPUT)) != 1:
-            raise NativeInputError("Windows rejected SendInput; elevated and secure desktops "
-                                   "cannot be controlled from an ordinary process")
+            raise NativeInputError("Windows rejected SendInput. Windows of elevated applications need "
+                                   "VirtualKVM started as administrator; the UAC secure desktop is never reachable")
 
     def send(self, event):
         kind = event["type"]
@@ -296,6 +426,10 @@ class _WindowsBackend:
             display = _display_at(event["display"], self._displays)
             x, y = _windows_absolute(display, event["x"], event["y"], self._displays)
             self._send(_INPUT(type=0, mi=_MOUSEINPUT(dx=x, dy=y, dwFlags=0x8000 | 0x4000 | 1)))
+        elif kind == "move":
+            # MOUSEEVENTF_MOVE without ABSOLUTE: raw relative motion.
+            if event["dx"] or event["dy"]:
+                self._send(_INPUT(type=0, mi=_MOUSEINPUT(dx=event["dx"], dy=event["dy"], dwFlags=1)))
         elif kind == "button":
             down, up = {"left": (2, 4), "right": (8, 16), "middle": (32, 64)}[event["button"]]
             self._send(_INPUT(type=0, mi=_MOUSEINPUT(dwFlags=down if event["down"] else up)))
@@ -315,6 +449,8 @@ class _MacBackend:
         self._permission_checked = 0.0
         self._last_click = None
         self._click_count = 0
+        self._displays: list[Display] = []
+        self._display_time = 0.0
 
     def send(self, event):
         q = self.q
@@ -356,6 +492,29 @@ class _MacBackend:
                     action, button = drag, native_button
                     break
             native_event = q.CGEventCreateMouseEvent(None, action, point, button)
+        elif kind == "move":
+            current = q.CGEventGetLocation(q.CGEventCreate(None))
+            # Relative motion arrives at mouse rate; refresh the screen list once a second.
+            if not self._displays or now - self._display_time > 1:
+                self._displays, self._display_time = list_displays(), now
+            displays = self._displays
+            left = min(d.x for d in displays)
+            top = min(d.y for d in displays)
+            right = max(d.x + d.width for d in displays) - 1
+            bottom = max(d.y + d.height for d in displays) - 1
+            point = (max(left, min(right, current.x + event["dx"])),
+                     max(top, min(bottom, current.y + event["dy"])))
+            action, button = q.kCGEventMouseMoved, q.kCGMouseButtonLeft
+            for name, drag, native_button in (("left", q.kCGEventLeftMouseDragged, q.kCGMouseButtonLeft),
+                    ("right", q.kCGEventRightMouseDragged, q.kCGMouseButtonRight),
+                    ("middle", q.kCGEventOtherMouseDragged, q.kCGMouseButtonCenter)):
+                if name in self._buttons:
+                    action, button = drag, native_button
+                    break
+            native_event = q.CGEventCreateMouseEvent(None, action, point, button)
+            # Applications reading raw deltas (3D views, games) use these fields.
+            q.CGEventSetIntegerValueField(native_event, q.kCGMouseEventDeltaX, event["dx"])
+            q.CGEventSetIntegerValueField(native_event, q.kCGMouseEventDeltaY, event["dy"])
         elif kind == "button":
             button = event["button"]
             down_type, up_type, number = {
@@ -456,8 +615,11 @@ class NativeInput:
             except (NativeInputError, OSError) as error:
                 result["detail"] = str(error)
         elif system == "Windows":
-            result.update(input_allowed=True, screen_recording_allowed=True,
-                          detail="Active user desktop only; elevated applications and secure desktops are restricted by Windows")
+            elevated = is_windows_admin()
+            result.update(input_allowed=True, screen_recording_allowed=True, elevated=elevated,
+                          detail=("Elevated: input reaches administrator windows; the UAC secure desktop stays unreachable"
+                                  if elevated else
+                                  "Active user desktop only; start VirtualKVM as administrator to control elevated applications"))
         else:
             result["detail"] = "Native capture/input requires Windows or macOS; synthetic mode is available"
         return result

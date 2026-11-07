@@ -25,7 +25,7 @@ if sys.platform.startswith("linux") and os.environ.get("QT_QPA_PLATFORM") in ("o
     os.environ.setdefault("QT_AUDIO_BACKEND", "pulseaudio")
 
 from PySide6.QtCore import QCoreApplication, QObject, QRectF, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QImage, QKeyEvent, QKeySequence, QPainter
+from PySide6.QtGui import QAction, QCloseEvent, QCursor, QImage, QKeyEvent, QKeySequence, QPainter
 from PySide6.QtNetwork import QAbstractSocket, QNetworkInterface
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
@@ -84,10 +84,17 @@ class _InputPump:
                     and self._queue[-1].get("type") == "pointer"
                     and self._queue[-1].get("display") == event.get("display")):
                 self._queue[-1] = event
+            elif (self._queue and event.get("type") == "move" and self._queue[-1].get("type") == "move"
+                  and abs(self._queue[-1]["dx"] + event["dx"]) <= 4096
+                  and abs(self._queue[-1]["dy"] + event["dy"]) <= 4096):
+                # Relative motion must be summed, never replaced, or distance is lost.
+                queued = self._queue[-1]
+                self._queue[-1] = {"type": "move", "dx": queued["dx"] + event["dx"],
+                                   "dy": queued["dy"] + event["dy"]}
             else:
                 if len(self._queue) >= 512:
                     for index, queued in enumerate(self._queue):
-                        if queued.get("type") == "pointer":
+                        if queued.get("type") in ("pointer", "move"):
                             del self._queue[index]
                             break
                     else:
@@ -209,8 +216,46 @@ def normalized_key(event: QKeyEvent) -> str | None:
     return None
 
 
+def nv12_rendering_available() -> bool:
+    """Whether QtMultimedia can present NV12 frames (GPU YUV conversion)."""
+    try:
+        from PySide6.QtCore import QSize
+        from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat
+        frame = QVideoFrame(QVideoFrameFormat(QSize(16, 16), QVideoFrameFormat.PixelFormat.Format_NV12))
+        if not frame.isValid() or not frame.map(QVideoFrame.MapMode.WriteOnly):
+            return False
+        try:
+            return frame.planeCount() == 2 and frame.bits(0) is not None and frame.bits(1) is not None
+        finally:
+            frame.unmap()
+    except Exception:
+        return False
+
+
+def input_transparent_video_widget(parent: QWidget):
+    """Create a QVideoWidget whose native video window never takes input.
+
+    Qt 6 renders QVideoWidget into a separate native QVideoWindow. Without
+    this flag that window receives the mouse and the canvas below it never
+    sees pointer events, so remote control silently stops over the picture.
+    """
+    from PySide6.QtMultimediaWidgets import QVideoWidget
+    before = set(QApplication.allWindows())
+    widget = QVideoWidget(parent)
+    for window in QApplication.allWindows():
+        if window not in before:
+            window.setFlag(Qt.WindowType.WindowTransparentForInput, True)
+    widget.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+    return widget
+
+
 class VideoCanvas(QWidget):
-    """Paint one latest frame, preserving aspect ratio and pointer geometry."""
+    """Present the latest frame, preserving aspect ratio and pointer geometry.
+
+    RGB frames are painted with QPainter. NV12 frames go to a QVideoSink, which
+    converts YUV and scales on the GPU. In captured-mouse mode the local cursor
+    is hidden and pinned, and only relative motion is sent.
+    """
 
     def __init__(self, display: int, send: Callable[[dict], None],
                  emergency: Callable[[], None], parent=None):
@@ -219,21 +264,71 @@ class VideoCanvas(QWidget):
         self._image = QImage()
         self._media_size = None
         self._video_surface = None
+        self._nv12_widget = None
+        self._nv12_format = None
+        self._nv12_size = None
         self._frame_serial = self._painted_serial = self.painted_frames = 0
         self._input_enabled = False
+        self._relative = False
         self._pressed_keys: set[str] = set()
         self._pressed_buttons: set[str] = set()
+        self.on_relative_changed: Callable[[bool], None] = lambda _enabled: None
+        # Older hosts reject relative motion; the window wires the real check.
+        self.relative_allowed: Callable[[], bool] = lambda: True
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
         self.setMinimumSize(160, 90)
 
-    def set_frame(self, rgb: bytes, width: int, height: int) -> None:
-        if width <= 0 or height <= 0 or len(rgb) != width * height * 3:
+    def set_frame(self, data: bytes, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
             return
-        self._image = QImage(rgb, width, height, width * 3,
-                             QImage.Format.Format_RGB888).copy()
+        if len(data) == width * height * 3:
+            self._image = QImage(bytes(data), width, height, width * 3,
+                                 QImage.Format.Format_RGB888).copy()
+            self._frame_serial += 1
+            self.update()
+        elif width % 2 == 0 and height % 2 == 0 and len(data) == width * height * 3 // 2:
+            self._set_nv12(data, width, height)
+
+    def _set_nv12(self, data, width: int, height: int) -> None:
+        from PySide6.QtCore import QSize
+        from PySide6.QtMultimedia import QVideoFrame, QVideoFrameFormat
+        if self._nv12_widget is None or self._nv12_size != (width, height):
+            if self._nv12_widget is None:
+                self._nv12_widget = input_transparent_video_widget(self)
+            self.set_video_surface(self._nv12_widget, width, height)
+            self._nv12_size = (width, height)
+            self._nv12_format = QVideoFrameFormat(QSize(width, height), QVideoFrameFormat.PixelFormat.Format_NV12)
+        frame = QVideoFrame(self._nv12_format)
+        if not frame.map(QVideoFrame.MapMode.WriteOnly):
+            return
+        try:
+            source = memoryview(data)
+            for plane, offset, rows in ((0, 0, height), (1, width * height, height // 2)):
+                stride, target = frame.bytesPerLine(plane), frame.bits(plane)
+                if stride == width:
+                    target[:width * rows] = source[offset:offset + width * rows]
+                else:
+                    for row in range(rows):
+                        start = offset + row * width
+                        target[row * stride:row * stride + width] = source[start:start + width]
+        finally:
+            frame.unmap()
+        self._nv12_widget.videoSink().setVideoFrame(frame)
         self._frame_serial += 1
-        self.update()
+        self.painted_frames += 1
+        self._painted_serial = self._frame_serial
+
+    @property
+    def has_frame(self) -> bool:
+        """Whether a decoded frame (RGB or GPU NV12) has been presented."""
+        return not self._image.isNull() or self._nv12_widget is not None and self._frame_serial > 0
+
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        if self._nv12_widget is not None and self._media_size is not None:
+            return self._media_size
+        return self._image.width(), self._image.height()
 
     def image_rect(self) -> QRectF:
         if (self._image.isNull() and self._media_size is None) or not self.width() or not self.height():
@@ -252,6 +347,7 @@ class VideoCanvas(QWidget):
             painter.setPen(Qt.GlobalColor.white)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Ожидаем видеопоток…")
         else:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             painter.drawImage(self.image_rect(), self._image)
             if self._painted_serial != self._frame_serial:
                 self.painted_frames += 1
@@ -274,9 +370,35 @@ class VideoCanvas(QWidget):
 
     def set_input_enabled(self, enabled: bool) -> None:
         if not enabled:
+            self.set_relative(False)
             self.release_pressed()
         self._input_enabled = enabled
         self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+
+    @property
+    def relative(self) -> bool:
+        return self._relative
+
+    def _capture_center(self):
+        return self.mapToGlobal(self.rect().center())
+
+    def set_relative(self, enabled: bool) -> bool:
+        """Enter or leave captured-mouse mode; returns the resulting state."""
+        enabled = bool(enabled) and self._input_enabled and (not enabled or self.relative_allowed())
+        if enabled == self._relative:
+            return self._relative
+        self._relative = enabled
+        if enabled:
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+            self.setCursor(Qt.CursorShape.BlankCursor)
+            self.grabMouse()
+            QCursor.setPos(self._capture_center())
+        else:
+            if QWidget.mouseGrabber() is self:
+                self.releaseMouse()
+            self.setCursor(Qt.CursorShape.CrossCursor if self._input_enabled else Qt.CursorShape.ArrowCursor)
+        self.on_relative_changed(enabled)
+        return enabled
 
     def release_pressed(self) -> None:
         if self._pressed_keys or self._pressed_buttons:
@@ -285,6 +407,7 @@ class VideoCanvas(QWidget):
         self._pressed_buttons.clear()
 
     def focusOutEvent(self, event) -> None:
+        self.set_relative(False)
         self.release_pressed()
         super().focusOutEvent(event)
 
@@ -292,10 +415,15 @@ class VideoCanvas(QWidget):
         modifiers = (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
                      | Qt.KeyboardModifier.ShiftModifier)
         if event.key() == Qt.Key.Key_Escape and event.modifiers() & modifiers == modifiers:
+            self.set_relative(False)
             self._emergency()
             event.accept()
             return
-        if event.key() == Qt.Key.Key_Escape and self.window().isFullScreen():
+        if event.key() == Qt.Key.Key_M and event.modifiers() & modifiers == modifiers:
+            self.set_relative(not self._relative)
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape and self.window().isFullScreen() and not self._relative:
             self.window().showNormal()
             event.accept()
             return
@@ -329,14 +457,31 @@ class VideoCanvas(QWidget):
                     "y": max(0.0, min(1.0, (position.y() - rect.top()) / rect.height()))})
         return True
 
+    def _relative_motion(self, event) -> None:
+        center = self._capture_center()
+        position = event.globalPosition()
+        ratio = self.devicePixelRatioF() or 1.0
+        dx = round((position.x() - center.x()) * ratio)
+        dy = round((position.y() - center.y()) * ratio)
+        if dx or dy:
+            limit = 4096
+            self._send({"type": "move", "dx": max(-limit, min(limit, dx)),
+                        "dy": max(-limit, min(limit, dy))})
+            # Re-centre; the synthetic move back to centre has zero delta.
+            QCursor.setPos(center)
+
     def mouseMoveEvent(self, event) -> None:
-        if self._input_enabled:
+        if not self._input_enabled:
+            return
+        if self._relative:
+            self._relative_motion(event)
+        else:
             self._pointer(event, clamp=bool(self._pressed_buttons))
 
     def mousePressEvent(self, event) -> None:
         self.setFocus(Qt.FocusReason.MouseFocusReason)
         button = _BUTTONS.get(event.button())
-        if self._input_enabled and button and self._pointer(event):
+        if self._input_enabled and button and (self._relative or self._pointer(event)):
             self._pressed_buttons.add(button)
             self._send({"type": "button", "button": button, "down": True})
             event.accept()
@@ -344,7 +489,8 @@ class VideoCanvas(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         button = _BUTTONS.get(event.button())
         if button in self._pressed_buttons:
-            self._pointer(event, clamp=True)
+            if not self._relative:
+                self._pointer(event, clamp=True)
             self._pressed_buttons.discard(button)
             self._send({"type": "button", "button": button, "down": False})
             event.accept()
@@ -355,7 +501,7 @@ class VideoCanvas(QWidget):
         self.mousePressEvent(event)
 
     def wheelEvent(self, event) -> None:
-        if not self._input_enabled or not self._pointer(event):
+        if not self._input_enabled or not (self._relative or self._pointer(event)):
             return
         delta = event.angleDelta()
         dx, dy = delta.x() / 120.0, delta.y() / 120.0
@@ -371,7 +517,8 @@ class VideoWindow(QMainWindow):
     closed = Signal(int)
     media_error = Signal(str)
 
-    def __init__(self, display: int, send, emergency, toggle_control, enabled: bool):
+    def __init__(self, display: int, send, emergency, toggle_control, enabled: bool,
+                 relative_allowed: Callable[[], bool] | None = None):
         super().__init__()
         self.display = display
         self._player = self._audio_output = self._video_widget = None
@@ -393,9 +540,17 @@ class VideoWindow(QMainWindow):
         fullscreen.setShortcut(QKeySequence("F11"))
         fullscreen.triggered.connect(lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
         toolbar.addAction(fullscreen)
+        self.capture_action = QAction("Захват мыши · Ctrl+Alt+Shift+M", self, checkable=True)
+        self.capture_action.setToolTip("Курсор скрыт и закреплён в окне, на компьютер передаются относительные "
+                                       "движения: для 3D, CAD и игр. Ctrl+Alt+Shift+M или Ctrl+Alt+Shift+Esc — выйти.")
+        self.capture_action.toggled.connect(self._capture_toggled)
+        toolbar.addAction(self.capture_action)
         release = QAction("Вернуть управление", self)
         release.triggered.connect(emergency)
         toolbar.addAction(release)
+        if relative_allowed is not None:
+            self.canvas.relative_allowed = relative_allowed
+        self.canvas.on_relative_changed = self._relative_changed
         self.canvas.set_input_enabled(enabled)
         toolbar.addSeparator()
         self.mute_action = QAction("Без звука", self, checkable=True)
@@ -413,9 +568,23 @@ class VideoWindow(QMainWindow):
         self.statusBar().showMessage("Управление в активном окне · Ctrl+Alt+Shift+Esc — вернуть управление")
         self.resize(960, 600)
 
+    def _capture_toggled(self, checked: bool) -> None:
+        state = self.canvas.set_relative(checked)
+        if checked and not state:
+            self.statusBar().showMessage("Захват мыши недоступен: включите «Управление» или обновите VirtualKVM на хосте.")
+        self._relative_changed(state)
+
+    def _relative_changed(self, enabled: bool) -> None:
+        self.capture_action.blockSignals(True)
+        self.capture_action.setChecked(enabled)
+        self.capture_action.blockSignals(False)
+        if enabled:
+            self.statusBar().showMessage("Мышь захвачена · Ctrl+Alt+Shift+M — освободить")
+        else:
+            self.statusBar().showMessage("Управление в активном окне · Ctrl+Alt+Shift+Esc — вернуть управление")
+
     def start_media(self, url: str, width: int, height: int) -> None:
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-        from PySide6.QtMultimediaWidgets import QVideoWidget
         source = QUrl(url)
         if source.scheme() != "http" or source.host() not in ("127.0.0.1", "localhost"):
             raise ValueError("AV-плеер принимает только внутренний локальный видеопоток")
@@ -427,8 +596,7 @@ class VideoWindow(QMainWindow):
             self._player.deleteLater()
             self._audio_output.deleteLater()
             self._video_widget.deleteLater()
-        self._video_widget = QVideoWidget(self.canvas)
-        self._video_widget.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self._video_widget = input_transparent_video_widget(self.canvas)
         self.canvas.set_video_surface(self._video_widget, width, height)
         self._audio_output = QAudioOutput(self)
         self._audio_output.setVolume(self.volume.value() / 100)
@@ -720,6 +888,8 @@ class MainWindow(QMainWindow):
         shared_help.setWordWrap(True)
         shared_help.setObjectName("muted")
         extra_form.addRow(shared_help)
+        if sys.platform == "win32":
+            self._add_elevation_controls(extra_form)
         columns.addWidget(extras, 1)
         layout.addLayout(columns, 1)
         buttons = QHBoxLayout()
@@ -820,9 +990,10 @@ class MainWindow(QMainWindow):
         resolution.addWidget(self.video_width)
         resolution.addWidget(QLabel("×"))
         resolution.addWidget(self.video_height)
-        self.frame_rate = self._spin(1, 240, 240)
-        self.bitrate = self._spin(1, 500, 45)
-        self.latency = self._spin(10, 2000, 30)
+        # Office work is the default: sharp text at 60 FPS.
+        self.frame_rate = self._spin(1, 240, 60)
+        self.bitrate = self._spin(1, 500, 20)
+        self.latency = self._spin(10, 2000, 60)
         self.codec = QComboBox()
         self.codec.addItem("H.264 · совместимость", "h264")
         self.codec.addItem("HEVC · H.265", "hevc")
@@ -857,6 +1028,7 @@ class MainWindow(QMainWindow):
             Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)))
         quality_form.addRow(advanced_toggle)
         quality_form.addRow(advanced)
+        self.profile.setCurrentIndex(1)
         self.profile.currentIndexChanged.connect(self._apply_profile)
         self.resolution_preset.currentIndexChanged.connect(self._apply_resolution)
         self.resolution_preset.setCurrentIndex(self._resolution_index(1920, 1080))
@@ -1069,8 +1241,48 @@ class MainWindow(QMainWindow):
         rectangles = fit_windows(self.monitor_layout.entries, fallback)
         return rectangles.get(index, fit_windows([entry], fallback)[index]), primary, False
 
+    def _add_elevation_controls(self, form: QFormLayout) -> None:
+        from . import winadmin
+        admin = winadmin.is_admin()
+        self.elevation_label = QLabel(
+            "Запущено от администратора: доступны окна программ, запущенных от администратора." if admin else
+            "Обычные права: Windows не даёт управлять окнами программ, запущенных от администратора.")
+        self.elevation_label.setWordWrap(True)
+        self.elevation_label.setObjectName("muted")
+        form.addRow(self.elevation_label)
+        if not admin:
+            restart = QPushButton("Перезапустить от администратора")
+            restart.clicked.connect(self._restart_elevated)
+            form.addRow(restart)
+        self.elevated_autostart = QCheckBox("Запускать от администратора при входе в Windows")
+        self.elevated_autostart.setToolTip("Задание планировщика для текущего пользователя: без пароля и без "
+                                           "запроса UAC при каждом входе. Окно входа и запросы UAC остаются недоступны.")
+        self.elevated_autostart.setChecked(winadmin.autostart_enabled())
+        self.elevated_autostart.toggled.connect(self._elevated_autostart_toggled)
+        form.addRow(self.elevated_autostart)
+
+    def _restart_elevated(self) -> None:
+        from . import winadmin
+        try:
+            winadmin.restart_elevated()
+        except winadmin.ElevationError as error:
+            self._status(str(error))
+            return
+        self.close()
+
+    def _elevated_autostart_toggled(self, enabled: bool) -> None:
+        from . import winadmin
+        try:
+            (winadmin.enable_autostart if enabled else winadmin.disable_autostart)()
+            self._status("Автозапуск от администратора включён." if enabled else "Автозапуск от администратора выключен.")
+        except (winadmin.ElevationError, OSError, ValueError) as error:
+            self._status(str(error))
+            self.elevated_autostart.blockSignals(True)
+            self.elevated_autostart.setChecked(winadmin.autostart_enabled())
+            self.elevated_autostart.blockSignals(False)
+
     def _apply_profile(self, index: int) -> None:
-        values = ((1920, 1080, 240, 45, 30), (1920, 1080, 60, 16, 60),
+        values = ((1920, 1080, 240, 45, 30), (1920, 1080, 60, 20, 60),
                   (3840, 2160, 60, 60, 60))
         if index >= len(values):
             return
@@ -1423,7 +1635,9 @@ class MainWindow(QMainWindow):
         epoch = self._viewer_epoch
         try:
             from .app import ViewerController
+            gpu_video = nv12_rendering_available()
             self._viewer = ViewerController(self.state_dir,
+                pixel_format="nv12" if gpu_video else "rgb24", hwaccel=gpu_video,
                 on_status=lambda text: _emit(self._bridge.status, str(text)),
                 on_frame=lambda index, rgb, width, height: self._receive_frame(epoch, index, rgb, width, height),
                 on_media=lambda index, url, width, height: _emit(self._bridge.media, epoch, index, url, width, height),
@@ -1632,7 +1846,8 @@ class MainWindow(QMainWindow):
         if (self._closing or epoch != self._viewer_epoch or type(index) is not int
                 or index < 0 or index > 63 or width <= 0 or height <= 0
                 or width > 16384 or height > 16384 or width * height > 67108864
-                or len(rgb) != width * height * 3 or index not in self._requested_displays):
+                or len(rgb) not in (width * height * 3, width * height * 3 // 2)
+                or index not in self._requested_displays):
             return
         with self._frames_lock:
             # At most one pending frame per selected source, never a Qt event per frame.
@@ -1661,7 +1876,9 @@ class MainWindow(QMainWindow):
         window = self.video_windows.get(index) or self._hidden_video_windows.get(index)
         if window is None:
             window = VideoWindow(index, self._send_input, self._release_all_control,
-                                 self.control_enabled.setChecked, self.control_enabled.isChecked())
+                                 self.control_enabled.setChecked, self.control_enabled.isChecked(),
+                                 relative_allowed=lambda: bool(self._viewer is not None
+                                                               and getattr(self._viewer, "relative_pointer", False)))
             window.setStyleSheet(_STYLE)
             window.closed.connect(self._video_closed)
             window.media_error.connect(self._media_failed)
@@ -1730,6 +1947,7 @@ class MainWindow(QMainWindow):
         self._send_input({"type": "release_all"})
         self.control_enabled.setChecked(False)
         for window in list(self.video_windows.values()):
+            window.canvas.set_relative(False)
             window.canvas.release_pressed()
 
     def _release_all_control(self):

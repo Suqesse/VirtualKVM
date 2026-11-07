@@ -414,7 +414,8 @@ class HostServer:
                           "shared": self.shared.info if session.permissions.files else {"enabled": False, "writable": False, "name": ""},
                           "permissions": session.permissions.encode(),
                           "capabilities": {"max_streams": MAX_STREAMS, "preserve_aspect": True,
-                                           "tcp_video": self.on_media_connection is not None}})
+                                           "tcp_video": self.on_media_connection is not None,
+                                           "relative_pointer": True}})
             # An unresponsive peer must release remote keys within a bounded
             # interval, including cable loss where TCP has not reported EOF.
             first_approved_request = authentication.get("type") == "request_access"
@@ -608,7 +609,7 @@ class ViewerClient:
         self.on_clipboard, self.on_status = on_clipboard, on_status
         self.displays = []
         self.shared_info = {"enabled": False, "writable": False, "name": ""}
-        self.capabilities = {"max_streams": 2, "preserve_aspect": False}
+        self.capabilities = {"max_streams": 2, "preserve_aspect": False, "relative_pointer": False}
         self._peer = None
         self._opening = None
         self.permissions = LEGACY_PERMISSIONS
@@ -668,7 +669,8 @@ class ViewerClient:
                 raise ProtocolError("Invalid host display limit")
             self.capabilities = {"max_streams": maximum,
                                  "preserve_aspect": capabilities.get("preserve_aspect") is True,
-                                 "tcp_video": capabilities.get("tcp_video") is True}
+                                 "tcp_video": capabilities.get("tcp_video") is True,
+                                 "relative_pointer": capabilities.get("relative_pointer") is True}
             self._peer = (host, port, fingerprint)
             self.shared_info = response.get("shared", {"enabled": False, "writable": False, "name": ""})
             connection.settimeout(10)

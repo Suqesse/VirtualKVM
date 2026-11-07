@@ -185,6 +185,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="virtualkvm", description="Encrypted LAN desktop video and input sharing")
     from . import __version__
     parser.add_argument("--version", action="version", version=f"VirtualKVM {__version__}")
+    # Internal: an elevated restart waits for the previous instance to exit.
+    parser.add_argument("--after-pid", type=int, help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("doctor", help="Check FFmpeg/SRT, native input and capture permissions")
     commands.add_parser("ui-check", help="Render and close the interface using temporary settings")
@@ -244,6 +246,9 @@ def main(argv=None):
             finally:
                 host.stop()
             return 0
+        if args.after_pid:
+            from .winadmin import wait_for_exit
+            wait_for_exit(args.after_pid)
         from .gui import run_gui
         return run_gui()
     except KeyboardInterrupt:
