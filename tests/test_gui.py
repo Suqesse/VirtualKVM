@@ -386,11 +386,11 @@ class GuiControllerIntegration(unittest.TestCase):
                 window._connect_viewer()
                 self.wait_for(lambda: len(window.video_windows) == 2, timeout=25)
                 self.wait_for(lambda: not window._connecting)
-                self.wait_for(lambda: all(not video.canvas._image.isNull() for video in window.video_windows.values()), timeout=25)
+                self.wait_for(lambda: all(video.canvas.has_frame for video in window.video_windows.values()), timeout=25)
                 self.assertTrue(window._viewer.connected)
                 self.assertEqual(set(window.video_windows), {0, 1})
                 for video in window.video_windows.values():
-                    self.assertEqual((video.canvas._image.width(), video.canvas._image.height()), (320, 180))
+                    self.assertEqual(video.canvas.frame_size, (320, 180))
                 self.assertEqual(len(window._viewer.receivers), 2)
                 window.control_enabled.setChecked(True)
                 window.video_windows[0].canvas.keyPressEvent(

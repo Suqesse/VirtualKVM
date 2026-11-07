@@ -224,11 +224,11 @@ class DisplayGuiTests(unittest.TestCase):
             window.encoder.setCurrentText("libx264")
             window.connect_button.click()
             self.wait_for(lambda: len(window.video_windows) == 3, timeout=30)
-            self.wait_for(lambda: all(not v.canvas._image.isNull() for v in window.video_windows.values()))
+            self.wait_for(lambda: all(v.canvas.has_frame for v in window.video_windows.values()))
             self.assertEqual(set(window.video_windows), {0, 2, 5})
             self.assertEqual(len(window._viewer.receivers), 3)
             self.assertEqual(host.displays, displays, "Receiving-window layout must not alter source desktop geometry")
-            self.assertLess(window.video_windows[2].canvas._image.width(), window.video_windows[2].canvas._image.height())
+            self.assertLess(*window.video_windows[2].canvas.frame_size)
             self.assertLess(window.video_windows[2].width(), window.video_windows[2].height())
             window.control_enabled.setChecked(True)
             canvas = window.video_windows[5].canvas

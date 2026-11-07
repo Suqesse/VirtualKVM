@@ -254,7 +254,16 @@ class ViewerController:
         finally:
             client.disconnect()
 
-    def __init__(self, state_dir=None, on_status=None, on_frame=None, on_clipboard=None, on_media=None):
+    def __init__(self, state_dir=None, on_status=None, on_frame=None, on_clipboard=None, on_media=None,
+                 pixel_format="rgb24", hwaccel=False):
+        """``pixel_format``/``hwaccel`` select the video-only decode path.
+
+        ``nv12`` with ``hwaccel`` is the GUI's GPU path; frames then arrive at
+        the even coded size, which pointer coordinates are corrected for.
+        """
+        if pixel_format not in ("rgb24", "nv12"):
+            raise ValueError("pixel_format must be rgb24 or nv12")
+        self.pixel_format, self.hwaccel = pixel_format, bool(hwaccel)
         self.on_status = on_status or (lambda _: None)
         self.on_frame = on_frame or (lambda *_: None)
         self.on_media = on_media
@@ -273,6 +282,11 @@ class ViewerController:
     @property
     def connected(self):
         return self.client.connected
+
+    @property
+    def relative_pointer(self):
+        """Whether the connected host accepts relative (captured-mouse) motion."""
+        return self.client.capabilities.get("relative_pointer") is True
 
     def _status(self, message):
         self.on_status(message)
@@ -331,12 +345,15 @@ class ViewerController:
                 stream_config = StreamConfig(**stream["config"])
                 if stream_config.audio:
                     self.audio_displays.add(stream["display"])
+                if stream_config.audio or self.pixel_format == "nv12":
+                    # These paths present the padded coded frame, not the viewport.
                     self._input_geometry[stream["display"]] = (
                         stream_config.width, stream_config.height,
                         stream_config.coded_width, stream_config.coded_height)
                 if stream_config.audio and self.on_media is None:
                     raise ValueError("Audio playback requires the desktop media player")
-                receiver = AVReceiver() if stream_config.audio else VideoReceiver()
+                receiver = (AVReceiver() if stream_config.audio else
+                            VideoReceiver(pixel_format=self.pixel_format, hwaccel=self.hwaccel))
                 self.receivers.append(receiver)
                 index = stream["display"]
                 tcp_port = None
